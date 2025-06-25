@@ -63,7 +63,7 @@ def telegram_webhook():
             with open("answers.json", "w", encoding="utf-8") as f:
                 json.dump(collected_answers, f, ensure_ascii=False, indent=2)
 
-            reply = f"✅ Спасибо! Я зафиксировал твой ответ.\n\n🧠 Резюме:\n{summary}"
+            reply = summary
         else:
             print("⛔ Ошибка от Dify:", response.status_code, response.text)
             reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code}"
