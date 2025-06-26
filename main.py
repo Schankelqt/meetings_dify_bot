@@ -54,26 +54,26 @@ def telegram_webhook():
 
         if response.status_code == 200:
             answer_text = response.json().get("answer", "")
-            
-            if "sum" in answer_text.lower():  # Проверяем наличие маркера 'sum' (без учёта регистра)
+
+            # Если в ответе есть признак 'sum' — сохраняем как итог
+            if "sum" in answer_text.lower():
                 summary = answer_text
                 collected_answers[chat_id] = {
                     "name": user_name,
                     "summary": summary
                 }
 
-                # Сохраняем в файл только итоговые ответы
+                # Сохраняем итоговые ответы в файл
                 with open("answers.json", "w", encoding="utf-8") as f:
                     json.dump(collected_answers, f, ensure_ascii=False, indent=2)
 
-                reply =summary
-            else:
-                # Ответ без маркера — не сохраняем, можно отправить уведомление или пропустить
-                reply = "⚠️ Ответ получен, но не содержит итогового саммари."
+            # В любом случае отправляем сотруднику ответ от Dify
+            reply = answer_text
+
         else:
             reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code}"
 
-        # Ответ сотруднику в Telegram
+        # Отправляем ответ пользователю в Telegram
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(send_url, json={"chat_id": chat_id, "text": reply})
 
