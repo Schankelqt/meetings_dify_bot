@@ -17,7 +17,8 @@ USERS = {
     946740162: "Александр Зайцев",
     368455189: "Наталья Голощапова",
     949507228: "Марьяна Дмитриевская",
-    220691670: "Алексей Хван"
+    220691670: "Алексей Хван",
+    775766895: "Кирилл Востриков"
 }
 
 # 📍 Руководитель
@@ -52,20 +53,24 @@ def telegram_webhook():
         response = requests.post(DIFY_API_URL, headers=headers, json=payload)
 
         if response.status_code == 200:
-            summary = response.json().get("answer", "❓ Нет ответа от Dify")
-            collected_answers[chat_id] = {
-                "name": user_name,
-                "raw": user_message,
-                "summary": summary
-            }
+            answer_text = response.json().get("answer", "")
+            
+            if "sum" in answer_text.lower():  # Проверяем наличие маркера 'sum' (без учёта регистра)
+                summary = answer_text
+                collected_answers[chat_id] = {
+                    "name": user_name,
+                    "summary": summary
+                }
 
-            # ✅ Сохраняем ответы в файл
-            with open("answers.json", "w", encoding="utf-8") as f:
-                json.dump(collected_answers, f, ensure_ascii=False, indent=2)
+                # Сохраняем в файл только итоговые ответы
+                with open("answers.json", "w", encoding="utf-8") as f:
+                    json.dump(collected_answers, f, ensure_ascii=False, indent=2)
 
-            reply = f"✅ Спасибо! Я зафиксировал твой ответ.\n\n🧠 Резюме:\n{summary}"
+                reply =summary
+            else:
+                # Ответ без маркера — не сохраняем, можно отправить уведомление или пропустить
+                reply = "⚠️ Ответ получен, но не содержит итогового саммари."
         else:
-            print("⛔ Ошибка от Dify:", response.status_code, response.text)
             reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code}"
 
         # Ответ сотруднику в Telegram
@@ -74,12 +79,14 @@ def telegram_webhook():
 
     return "ok"
 
+
 @app.route("/test", methods=["POST"])
 def test_route():
     print("📨 /test был вызван!")
     data = request.get_json()
     print("📦 Данные из /test:", data)
     return "OK"
+
 
 if __name__ == "__main__":
     print("✅ TOKEN:", TELEGRAM_TOKEN)
