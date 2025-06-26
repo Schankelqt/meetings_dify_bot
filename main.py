@@ -3,15 +3,13 @@ import requests
 from dotenv import dotenv_values
 import json
 
-# 🌍 Загружаем переменные окружения
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
 DIFY_API_KEY = env.get("DIFY_API_KEY")
-DIFY_API_URL = env.get("DIFY_API_URL").rstrip('/')  # Убираем лишний слеш
+DIFY_API_URL = env.get("DIFY_API_URL").rstrip('/')
 
 app = Flask(__name__)
 
-# 📍 Список сотрудников
 USERS = {
     731869173: "Татьяна Воронкова",
     946740162: "Александр Зайцев",
@@ -20,13 +18,8 @@ USERS = {
     220691670: "Алексей Хван"
 }
 
-# 📍 Руководитель
 MANAGER_ID = 949507228
-
-# 🗃 Хранилище собранных ответов (в памяти и в файле)
 collected_answers = {}
-
-# 💾 Хранилище conversation_id для каждого chat_id (в памяти)
 conversation_ids = {}
 
 def get_conversation_id(chat_id):
@@ -38,36 +31,36 @@ def get_conversation_id(chat_id):
         resp.raise_for_status()
         data = resp.json()
         if data.get("data") and len(data["data"]) > 0:
-            return data["data"][0]["id"]  # Берём самый последний conversation_id
+            return data["data"][0]["id"]
         else:
+            print(f"[INFO] Нет активных разговоров для пользователя {chat_id}")
             return None
     except Exception as e:
-        print(f"Ошибка при получении conversation_id для {chat_id}: {e}")
+        print(f"[ERROR] Ошибка при получении conversation_id для {chat_id}: {e}")
         return None
 
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
-    print("✅ Webhook вызван")
     data = request.get_json()
-    print("📦 Данные:", data)
+    print(f"✅ Webhook вызван с данными: {data}")
 
     if "message" in data and "text" in data["message"]:
         chat_id = data["message"]["chat"]["id"]
         user_message = data["message"]["text"]
         user_name = USERS.get(chat_id, "Неизвестный")
 
-        # Получаем или создаём conversation_id
         conv_id = conversation_ids.get(chat_id)
         if not conv_id:
             conv_id = get_conversation_id(chat_id)
             if conv_id:
                 conversation_ids[chat_id] = conv_id
+            else:
+                print(f"[INFO] conversation_id не найден, создадим новую сессию для {chat_id}")
 
         headers = {
             "Authorization": f"Bearer {DIFY_API_KEY}",
             "Content-Type": "application/json"
         }
-        # Формируем payload для чат-сообщений, передаём conversation_id если есть
         payload = {
             "inputs": {},
             "query": user_message,
@@ -77,26 +70,31 @@ def telegram_webhook():
         if conv_id:
             payload["conversation_id"] = conv_id
 
-        response = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload)
-
-        if response.status_code == 200:
-            answer_text = response.json().get("answer", "")
-            if "sum" in answer_text.lower():  # Если в ответе есть признак 'sum' — итог
-                summary = answer_text
-                collected_answers[chat_id] = {
-                    "name": user_name,
-                    "summary": summary
-                }
-                # Сохраняем в файл только итоговые ответы
-                with open("answers.json", "w", encoding="utf-8") as f:
-                    json.dump(collected_answers, f, ensure_ascii=False, indent=2)
-            reply = answer_text
-        else:
-            reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code}"
+        try:
+            response = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload)
+            if response.status_code == 200:
+                answer_text = response.json().get("answer", "")
+                if "sum" in answer_text.lower():
+                    collected_answers[chat_id] = {
+                        "name": user_name,
+                        "summary": answer_text
+                    }
+                    with open("answers.json", "w", encoding="utf-8") as f:
+                        json.dump(collected_answers, f, ensure_ascii=False, indent=2)
+                reply = answer_text
+            else:
+                reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code}"
+        except Exception as e:
+            reply = f"⚠️ Ошибка запроса к Dify: {e}"
+            print(f"[ERROR] Ошибка запроса к Dify: {e}")
 
         # Отправляем ответ пользователю в Telegram
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(send_url, json={"chat_id": chat_id, "text": reply})
+        try:
+            tg_resp = requests.post(send_url, json={"chat_id": chat_id, "text": reply})
+            tg_resp.raise_for_status()
+        except Exception as e:
+            print(f"[ERROR] Ошибка при отправке сообщения в Telegram: {e}")
 
     return "ok"
 
@@ -104,11 +102,11 @@ def telegram_webhook():
 def test_route():
     print("📨 /test был вызван!")
     data = request.get_json()
-    print("📦 Данные из /test:", data)
+    print(f"📦 Данные из /test: {data}")
     return "OK"
 
 if __name__ == "__main__":
-    print("✅ TOKEN:", TELEGRAM_TOKEN)
+    print(f"✅ TOKEN: {TELEGRAM_TOKEN}")
     print("🔍 Зарегистрированные маршруты:")
     print(app.url_map)
     app.run(host="0.0.0.0", port=5001)
