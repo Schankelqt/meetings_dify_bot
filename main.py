@@ -56,7 +56,7 @@ def telegram_webhook():
             if conv_id:
                 conversation_ids[chat_id] = conv_id
             else:
-                print(f"[INFO] conversation_id не найден, создадим новую сессию для {chat_id}")
+                print(f"[INFO] conversation_id не найден, создаём новую сессию для {chat_id}")
 
         headers = {
             "Authorization": f"Bearer {DIFY_API_KEY}",
@@ -75,21 +75,29 @@ def telegram_webhook():
             response = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload)
             if response.status_code == 200:
                 answer_text = response.json().get("answer", "")
+
                 if "sum" in answer_text.lower():
+                    # Очищаем ответ, оставляя только от первого вхождения "sum" и далее
+                    lower_answer = answer_text.lower()
+                    idx = lower_answer.find("sum")
+                    summary = answer_text[idx:]
+
                     collected_answers[chat_id] = {
                         "name": user_name,
-                        "summary": answer_text
+                        "summary": summary
                     }
                     with open("answers.json", "w", encoding="utf-8") as f:
                         json.dump(collected_answers, f, ensure_ascii=False, indent=2)
-                reply = answer_text
+
+                    reply = summary
+                else:
+                    reply = answer_text
             else:
                 reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code}"
         except Exception as e:
             reply = f"⚠️ Ошибка запроса к Dify: {e}"
             print(f"[ERROR] Ошибка запроса к Dify: {e}")
 
-        # Отправляем ответ пользователю в Telegram
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
             tg_resp = requests.post(send_url, json={"chat_id": chat_id, "text": reply})
