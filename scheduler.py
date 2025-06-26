@@ -68,8 +68,8 @@ def send_summary():
     print("✅ Отчёт отправлен")
 
 # ⏰ Планирование
-schedule.every().day.at("23:37").do(send_questions)
-schedule.every().day.at("23:39").do(send_summary)
+schedule.every().day.at("01:20").do(send_questions)
+schedule.every().day.at("01:22").do(send_summary)
 
 print("🕒 Единый планировщик запущен. Ожидаем задачи...")
 
