@@ -7,7 +7,7 @@ import json
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
 DIFY_API_KEY = env.get("DIFY_API_KEY")
-DIFY_API_URL = env.get("DIFY_API_URL").rstrip('/')  # убираем лишний слеш в конце, если есть
+DIFY_API_URL = env.get("DIFY_API_URL").rstrip('/')  # Убираем лишний слеш
 
 app = Flask(__name__)
 
@@ -38,7 +38,7 @@ def get_conversation_id(chat_id):
         resp.raise_for_status()
         data = resp.json()
         if data.get("data") and len(data["data"]) > 0:
-            return data["data"][0]["id"]  # берем самый последний разговор
+            return data["data"][0]["id"]  # Берём самый последний conversation_id
         else:
             return None
     except Exception as e:
@@ -67,6 +67,7 @@ def telegram_webhook():
             "Authorization": f"Bearer {DIFY_API_KEY}",
             "Content-Type": "application/json"
         }
+        # Формируем payload для чат-сообщений, передаём conversation_id если есть
         payload = {
             "inputs": {},
             "query": user_message,
@@ -76,28 +77,24 @@ def telegram_webhook():
         if conv_id:
             payload["conversation_id"] = conv_id
 
-        response = requests.post(DIFY_API_URL, headers=headers, json=payload)
+        response = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload)
 
         if response.status_code == 200:
             answer_text = response.json().get("answer", "")
-            if "sum" in answer_text.lower():  # если в ответе есть "sum"
+            if "sum" in answer_text.lower():  # Если в ответе есть признак 'sum' — итог
                 summary = answer_text
                 collected_answers[chat_id] = {
                     "name": user_name,
                     "summary": summary
                 }
-                # Сохраняем итоговые ответы в файл
+                # Сохраняем в файл только итоговые ответы
                 with open("answers.json", "w", encoding="utf-8") as f:
                     json.dump(collected_answers, f, ensure_ascii=False, indent=2)
-
-                reply = f"✅ Зафиксировал итог:\n{summary}"
-            else:
-                # Просто пересылаем ответ от Dify, чтобы диалог продолжался
-                reply = answer_text
+            reply = answer_text
         else:
             reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code}"
 
-        # Отправляем ответ сотруднику в Telegram
+        # Отправляем ответ пользователю в Telegram
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(send_url, json={"chat_id": chat_id, "text": reply})
 
