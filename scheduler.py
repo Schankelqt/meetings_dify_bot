@@ -61,7 +61,7 @@ def build_digest(answers):
     if not answers:
         return "⚠️ Пока нет ответов от сотрудников."
 
-    lines = ["📝 Статусы на 9:30:\n"]
+    lines = ["📝 Статусы на 12:00:\n"]
     for chat_id, data in answers.items():
         lines.append(f"— {data['name']}:\n{data['summary']}\n")
     return "\n".join(lines)
