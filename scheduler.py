@@ -61,7 +61,7 @@ def build_digest(answers):
     if not answers:
         return "⚠️ Пока нет ответов от сотрудников."
 
-    lines = ["📝 Статусы на 12:00:\n"]
+    lines = ["📝 Статусы на 12:30:\n"]
     for chat_id, data in answers.items():
         lines.append(f"— {data['name']}:\n{data['summary']}\n")
     return "\n".join(lines)
@@ -77,7 +77,7 @@ def send_summary():
     print("✅ Отчёт отправлен")
 
 # ⏰ Планирование
-schedule.every().day.at("10:00").do(send_questions)
+schedule.every().day.at("09:00").do(send_questions)
 schedule.every().day.at("12:00").do(send_summary)
 
 print("🕒 Единый планировщик запущен. Ожидаем задачи...")
