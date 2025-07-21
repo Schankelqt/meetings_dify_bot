@@ -14,7 +14,7 @@ QUESTION_TEXT = (
     "Пожалуйста, ответьте на 3 вопроса:\n"
     "1. Что делали вчера?\n"
     "2. Что планируете сегодня?\n"
-    "3. Есть ли риски или блокеры?"
+    "3. Есть ли блокеры?"
 )
 
 def is_weekday():
@@ -80,13 +80,13 @@ def send_summary():
         requests.post(url, json={"chat_id": team_data["manager"], "text": digest})
         print(f"✅ Отчёт отправлен руководителю команды {team_id}")
 
-schedule.every().monday.at("16:45").do(send_questions)
+schedule.every().monday.at("18:15").do(send_questions)
 schedule.every().tuesday.at("10:00").do(send_questions)
 schedule.every().wednesday.at("10:00").do(send_questions)
 schedule.every().thursday.at("10:00").do(send_questions)
 schedule.every().friday.at("10:00").do(send_questions)
 
-schedule.every().monday.at("17:00").do(send_summary)
+schedule.every().monday.at("18:20").do(send_summary)
 schedule.every().tuesday.at("12:00").do(send_summary)
 schedule.every().wednesday.at("12:00").do(send_summary)
 schedule.every().thursday.at("12:00").do(send_summary)

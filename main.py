@@ -11,7 +11,6 @@ DIFY_API_URL = env.get("DIFY_API_URL").rstrip('/')
 
 app = Flask(__name__)
 
-MANAGER_ID = 775766895
 collected_answers = {}
 conversation_ids = {}
 
@@ -73,7 +72,7 @@ def telegram_webhook():
                     idx = lower_answer.find("sum") + len("sum")
                     summary = answer_text[idx:].strip()
 
-                    collected_answers[chat_id] = {
+                    collected_answers[str(chat_id)] = {
                         "name": user_name,
                         "summary": summary
                     }
