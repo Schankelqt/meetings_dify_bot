@@ -2,6 +2,7 @@ from flask import Flask, request
 import requests
 from dotenv import dotenv_values
 import json
+from users import USERS  # Импортируем USERS из users.py
 
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
@@ -9,10 +10,6 @@ DIFY_API_KEY = env.get("DIFY_API_KEY")
 DIFY_API_URL = env.get("DIFY_API_URL").rstrip('/')
 
 app = Flask(__name__)
-
-USERS = {
-    775766895: "Кирилл Востриков"
-}
 
 MANAGER_ID = 775766895
 collected_answers = {}
@@ -72,10 +69,9 @@ def telegram_webhook():
                 answer_text = response.json().get("answer", "")
 
                 if "sum" in answer_text.lower():
-                    # Очищаем ответ, оставляя только от первого вхождения "sum" и далее
                     lower_answer = answer_text.lower()
-                    idx = lower_answer.find("sum")
-                    summary = answer_text[idx:]
+                    idx = lower_answer.find("sum") + len("sum")
+                    summary = answer_text[idx:].strip()
 
                     collected_answers[chat_id] = {
                         "name": user_name,

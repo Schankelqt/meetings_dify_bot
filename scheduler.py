@@ -4,20 +4,11 @@ import time
 import json
 from dotenv import dotenv_values
 from datetime import datetime
+from users import USERS, TEAMS  # Импортируем USERS и TEAMS
 
-# 🔐 Загружаем переменные окружения
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
 
-# 📍 Чат-ID сотрудников
-USERS = {
-            775766895: "Кирилл Востриков"
-}
-
-# 📍 Чат-ID руководителя
-MANAGER_ID = 775766895
-
-# 🕘 Текст вопроса
 QUESTION_TEXT = (
     "Доброе утро! ☀️\n\n"
     "Пожалуйста, ответьте на 3 вопроса:\n"
@@ -26,20 +17,24 @@ QUESTION_TEXT = (
     "3. Есть ли риски или блокеры?"
 )
 
-# ✅ Рассылка вопросов и очистка answers.json
-def send_questions():
-    print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Рассылка вопросов сотрудникам...")
+def is_weekday():
+    return datetime.today().weekday() < 5  # Пн=0 ... Вс=6
 
-    # Очистка файла
+def send_questions():
+    if not is_weekday():
+        print("Сегодня выходной, вопросы не рассылаем")
+        return
+
+    print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Рассылка вопросов сотрудникам...")
     with open("answers.json", "w", encoding="utf-8") as f:
         json.dump({}, f)
 
-    for chat_id, name in USERS.items():
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        response = requests.post(url, json={"chat_id": chat_id, "text": QUESTION_TEXT})
-        print(f"✅ Вопрос отправлен: {name}")
+    for team_id, team_data in TEAMS.items():
+        for chat_id, name in team_data["members"].items():
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            requests.post(url, json={"chat_id": chat_id, "text": QUESTION_TEXT})
+            print(f"✅ Вопрос отправлен: {name}")
 
-# 📥 Загрузка ответов
 def load_answers():
     try:
         with open("answers.json", "r", encoding="utf-8") as f:
@@ -47,31 +42,57 @@ def load_answers():
     except FileNotFoundError:
         return {}
 
-# 📊 Сбор и форматирование отчёта
-def build_digest(answers):
+def build_digest(answers, team_members):
     if not answers:
         return "⚠️ Пока нет ответов от сотрудников."
 
     lines = ["📝 Статусы на 12:30:\n"]
-    for chat_id, data in answers.items():
-        lines.append(f"— {data['name']}:\n{data['summary']}\n")
+    total = len(team_members)
+    responded = 0
+    blockers_count = 0
+
+    for chat_id, name in team_members.items():
+        if str(chat_id) in answers:
+            summary = answers[str(chat_id)].get("summary", "")
+            lines.append(f"— {name}:\n{summary}\n")
+            responded += 1
+            if "блокер" in summary.lower():
+                blockers_count += 1
+        else:
+            lines.append(f"— {name}:\n- (прочерк)\n")
+
+    lines.append(f"Отчитались: {responded}/{total}")
+    lines.append(f"Блокеры: {blockers_count}/{total}")
+
     return "\n".join(lines)
 
-# 📤 Отправка отчёта руководителю
 def send_summary():
-    print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Отправка отчёта руководителю...")
+    if not is_weekday():
+        print("Сегодня выходной, отчёты не отправляем")
+        return
+
+    print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Отправка отчётов руководителям...")
     answers = load_answers()
-    digest = build_digest(answers)
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": MANAGER_ID, "text": digest})
-    print("✅ Отчёт отправлен")
+    for team_id, team_data in TEAMS.items():
+        digest = build_digest(answers, team_data["members"])
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": team_data["manager"], "text": digest})
+        print(f"✅ Отчёт отправлен руководителю команды {team_id}")
 
-# ⏰ Планирование
-schedule.every().day.at("09:00").do(send_questions)
-schedule.every().day.at("12:00").do(send_summary)
+schedule.every().monday.at("16:45").do(send_questions)
+schedule.every().tuesday.at("10:00").do(send_questions)
+schedule.every().wednesday.at("10:00").do(send_questions)
+schedule.every().thursday.at("10:00").do(send_questions)
+schedule.every().friday.at("10:00").do(send_questions)
 
-print("🕒 Единый планировщик запущен. Ожидаем задачи...")
+schedule.every().monday.at("17:00").do(send_summary)
+schedule.every().tuesday.at("12:00").do(send_summary)
+schedule.every().wednesday.at("12:00").do(send_summary)
+schedule.every().thursday.at("12:00").do(send_summary)
+schedule.every().friday.at("12:00").do(send_summary)
+
+print("🕒 Планировщик запущен. Ожидаем задач...")
 
 while True:
     schedule.run_pending()
