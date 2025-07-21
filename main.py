@@ -22,6 +22,7 @@ def get_conversation_id(chat_id):
         resp = requests.get(url, headers=headers, params=params)
         resp.raise_for_status()
         data = resp.json()
+        print(f"[Dify] get_conversation_id response for {chat_id}: {data}")
         if data.get("data") and len(data["data"]) > 0:
             return data["data"][0]["id"]
         else:
@@ -62,8 +63,12 @@ def telegram_webhook():
         if conv_id:
             payload["conversation_id"] = conv_id
 
+        print(f"[Dify] Отправляем запрос: {json.dumps(payload, ensure_ascii=False)}")
         try:
             response = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload)
+            print(f"[Dify] HTTP Status: {response.status_code}")
+            print(f"[Dify] Ответ от сервера: {response.text}")
+
             if response.status_code == 200:
                 answer_text = response.json().get("answer", "")
 
@@ -72,6 +77,7 @@ def telegram_webhook():
                     idx = lower_answer.find("sum") + len("sum")
                     summary = answer_text[idx:].strip()
 
+                    # Ключи словаря должны быть строками для корректного JSON
                     collected_answers[str(chat_id)] = {
                         "name": user_name,
                         "summary": summary
@@ -91,6 +97,7 @@ def telegram_webhook():
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
             tg_resp = requests.post(send_url, json={"chat_id": chat_id, "text": reply})
+            print(f"[Telegram API] Status: {tg_resp.status_code}, Response: {tg_resp.text}")
             tg_resp.raise_for_status()
         except Exception as e:
             print(f"[ERROR] Ошибка при отправке сообщения в Telegram: {e}")
