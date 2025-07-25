@@ -90,7 +90,7 @@ schedule.every().monday.at("18:20").do(send_summary)
 schedule.every().tuesday.at("12:00").do(send_summary)
 schedule.every().wednesday.at("12:00").do(send_summary)
 schedule.every().thursday.at("12:00").do(send_summary)
-schedule.every().friday.at("12:00").do(send_summary)
+schedule.every().friday.at("10:25").do(send_summary)
 
 print("🕒 Планировщик запущен. Ожидаем задач...")
 

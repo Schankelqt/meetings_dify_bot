@@ -54,6 +54,17 @@ def telegram_webhook():
             "Authorization": f"Bearer {DIFY_API_KEY}",
             "Content-Type": "application/json"
         }
+
+        def send_to_dify(payload):
+            try:
+                response = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload)
+                print(f"[Dify] HTTP Status: {response.status_code}")
+                print(f"[Dify] Ответ от сервера: {response.text}")
+                return response
+            except Exception as e:
+                print(f"[ERROR] Ошибка запроса к Dify: {e}")
+                return None
+
         payload = {
             "inputs": {},
             "query": user_message,
@@ -63,36 +74,39 @@ def telegram_webhook():
         if conv_id:
             payload["conversation_id"] = conv_id
 
-        print(f"[Dify] Отправляем запрос: {json.dumps(payload, ensure_ascii=False)}")
-        try:
-            response = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload)
-            print(f"[Dify] HTTP Status: {response.status_code}")
-            print(f"[Dify] Ответ от сервера: {response.text}")
+        response = send_to_dify(payload)
 
-            if response.status_code == 200:
-                answer_text = response.json().get("answer", "")
+        # При 404 — создаём новую сессию без conversation_id
+        if response is not None and response.status_code == 404:
+            print(f"[INFO] Conversation ID не существует, создаём новую сессию для {chat_id}")
+            payload.pop("conversation_id", None)
+            response = send_to_dify(payload)
+            if response is not None and response.status_code == 200:
+                data = response.json()
+                new_conv_id = data.get("conversation_id")
+                if new_conv_id:
+                    conversation_ids[chat_id] = new_conv_id
+                    print(f"[INFO] Новая сессия создана с ID: {new_conv_id}")
 
-                if "sum" in answer_text.lower():
-                    lower_answer = answer_text.lower()
-                    idx = lower_answer.find("sum") + len("sum")
-                    summary = answer_text[idx:].strip()
+        if response is not None and response.status_code == 200:
+            answer_text = response.json().get("answer", "")
+            if "sum" in answer_text.lower():
+                lower_answer = answer_text.lower()
+                idx = lower_answer.find("sum") + len("sum")
+                summary = answer_text[idx:].strip()
 
-                    # Ключи словаря должны быть строками для корректного JSON
-                    collected_answers[str(chat_id)] = {
-                        "name": user_name,
-                        "summary": summary
-                    }
-                    with open("answers.json", "w", encoding="utf-8") as f:
-                        json.dump(collected_answers, f, ensure_ascii=False, indent=2)
+                collected_answers[str(chat_id)] = {
+                    "name": user_name,
+                    "summary": summary
+                }
+                with open("answers.json", "w", encoding="utf-8") as f:
+                    json.dump(collected_answers, f, ensure_ascii=False, indent=2)
 
-                    reply = summary
-                else:
-                    reply = answer_text
+                reply = summary
             else:
-                reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code}"
-        except Exception as e:
-            reply = f"⚠️ Ошибка запроса к Dify: {e}"
-            print(f"[ERROR] Ошибка запроса к Dify: {e}")
+                reply = answer_text
+        else:
+            reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code if response else 'Нет ответа'}"
 
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
