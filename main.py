@@ -32,6 +32,12 @@ def get_conversation_id(chat_id):
         print(f"[ERROR] Ошибка при получении conversation_id для {chat_id}: {e}")
         return None
 
+def remove_sum_line(text: str) -> str:
+    """Удалить из текста строку, содержащую 'sum' (регистронезависимо)"""
+    lines = text.split('\n')
+    filtered_lines = [line for line in lines if 'sum' not in line.lower()]
+    return "\n".join(filtered_lines)
+
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     data = request.get_json()
@@ -90,19 +96,19 @@ def telegram_webhook():
 
         if response is not None and response.status_code == 200:
             answer_text = response.json().get("answer", "")
+
             if "sum" in answer_text.lower():
-                lower_answer = answer_text.lower()
-                idx = lower_answer.find("sum") + len("sum")
-                summary = answer_text[idx:].strip()
+                # Убираем из summary строку с "sum"
+                cleaned_summary = remove_sum_line(answer_text)
 
                 collected_answers[str(chat_id)] = {
                     "name": user_name,
-                    "summary": summary
+                    "summary": cleaned_summary.strip()
                 }
                 with open("answers.json", "w", encoding="utf-8") as f:
                     json.dump(collected_answers, f, ensure_ascii=False, indent=2)
 
-                reply = summary
+                reply = cleaned_summary
             else:
                 reply = answer_text
         else:

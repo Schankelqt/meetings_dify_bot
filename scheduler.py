@@ -49,20 +49,16 @@ def build_digest(answers, team_members):
     lines = ["📝 Статусы на 12:30:\n"]
     total = len(team_members)
     responded = 0
-    blockers_count = 0
 
     for chat_id, name in team_members.items():
         if str(chat_id) in answers:
             summary = answers[str(chat_id)].get("summary", "")
             lines.append(f"— {name}:\n{summary}\n")
             responded += 1
-            if "блокер" in summary.lower():
-                blockers_count += 1
         else:
             lines.append(f"— {name}:\n- (прочерк)\n")
 
     lines.append(f"Отчитались: {responded}/{total}")
-    lines.append(f"Блокеры: {blockers_count}/{total}")
 
     return "\n".join(lines)
 
@@ -80,17 +76,17 @@ def send_summary():
         requests.post(url, json={"chat_id": team_data["manager"], "text": digest})
         print(f"✅ Отчёт отправлен руководителю команды {team_id}")
 
-schedule.every().monday.at("18:15").do(send_questions)
+schedule.every().monday.at("10:00").do(send_questions)
 schedule.every().tuesday.at("10:00").do(send_questions)
 schedule.every().wednesday.at("10:00").do(send_questions)
 schedule.every().thursday.at("10:00").do(send_questions)
-schedule.every().friday.at("10:00").do(send_questions)
+schedule.every().friday.at("11:00").do(send_questions)
 
-schedule.every().monday.at("18:20").do(send_summary)
+schedule.every().monday.at("12:00").do(send_summary)
 schedule.every().tuesday.at("12:00").do(send_summary)
 schedule.every().wednesday.at("12:00").do(send_summary)
 schedule.every().thursday.at("12:00").do(send_summary)
-schedule.every().friday.at("10:25").do(send_summary)
+schedule.every().friday.at("12:10").do(send_summary)
 
 print("🕒 Планировщик запущен. Ожидаем задач...")
 
