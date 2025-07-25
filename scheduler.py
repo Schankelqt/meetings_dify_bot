@@ -80,13 +80,13 @@ schedule.every().monday.at("10:00").do(send_questions)
 schedule.every().tuesday.at("10:00").do(send_questions)
 schedule.every().wednesday.at("10:00").do(send_questions)
 schedule.every().thursday.at("10:00").do(send_questions)
-schedule.every().friday.at("11:00").do(send_questions)
+schedule.every().friday.at("12:30").do(send_questions)
 
 schedule.every().monday.at("12:00").do(send_summary)
 schedule.every().tuesday.at("12:00").do(send_summary)
 schedule.every().wednesday.at("12:00").do(send_summary)
 schedule.every().thursday.at("12:00").do(send_summary)
-schedule.every().friday.at("12:10").do(send_summary)
+schedule.every().friday.at("12:40").do(send_summary)
 
 print("🕒 Планировщик запущен. Ожидаем задач...")
 
