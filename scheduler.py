@@ -26,6 +26,7 @@ def send_questions():
         return
 
     print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Рассылка вопросов сотрудникам...")
+    # Очищаем файл перед рассылкой
     with open("answers.json", "w", encoding="utf-8") as f:
         json.dump({}, f)
 
@@ -46,7 +47,7 @@ def build_digest(answers, team_members):
     if not answers:
         return "⚠️ Пока нет ответов от сотрудников."
 
-    lines = ["📝 Статусы на 12:30:\n"]
+    lines = ["📝 Статусы на отчётное время:\n"]
     total = len(team_members)
     responded = 0
 
@@ -62,31 +63,41 @@ def build_digest(answers, team_members):
 
     return "\n".join(lines)
 
-def send_summary():
+def send_summary(team_id):
     if not is_weekday():
-        print("Сегодня выходной, отчёты не отправляем")
+        print(f"Сегодня выходной, отчёты команде {team_id} не отправляем")
         return
 
-    print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Отправка отчётов руководителям...")
+    print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Отправка отчёта руководителю команды {team_id}...")
     answers = load_answers()
 
-    for team_id, team_data in TEAMS.items():
-        digest = build_digest(answers, team_data["members"])
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": team_data["manager"], "text": digest})
-        print(f"✅ Отчёт отправлен руководителю команды {team_id}")
+    team_data = TEAMS[team_id]
+    digest = build_digest(answers, team_data["members"])
 
-schedule.every().monday.at("10:00").do(send_questions)
-schedule.every().tuesday.at("10:00").do(send_questions)
-schedule.every().wednesday.at("10:00").do(send_questions)
-schedule.every().thursday.at("10:00").do(send_questions)
-schedule.every().friday.at("12:30").do(send_questions)
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": team_data["manager"], "text": digest})
+    print(f"✅ Отчёт отправлен руководителю команды {team_id}")
 
-schedule.every().monday.at("12:00").do(send_summary)
-schedule.every().tuesday.at("12:00").do(send_summary)
-schedule.every().wednesday.at("12:00").do(send_summary)
-schedule.every().thursday.at("12:00").do(send_summary)
-schedule.every().friday.at("12:40").do(send_summary)
+# Рассылка вопросов для обеих команд в 09:00
+schedule.every().monday.at("09:00").do(send_questions)
+schedule.every().tuesday.at("09:00").do(send_questions)
+schedule.every().wednesday.at("09:00").do(send_questions)
+schedule.every().thursday.at("09:00").do(send_questions)
+schedule.every().friday.at("09:00").do(send_questions)
+
+# Отчёт команде 1 в 09:30
+schedule.every().monday.at("09:30").do(lambda: send_summary(1))
+schedule.every().tuesday.at("09:30").do(lambda: send_summary(1))
+schedule.every().wednesday.at("09:30").do(lambda: send_summary(1))
+schedule.every().thursday.at("09:30").do(lambda: send_summary(1))
+schedule.every().friday.at("09:30").do(lambda: send_summary(1))
+
+# Отчёт команде 2 в 11:00
+schedule.every().monday.at("11:00").do(lambda: send_summary(2))
+schedule.every().tuesday.at("11:00").do(lambda: send_summary(2))
+schedule.every().wednesday.at("11:00").do(lambda: send_summary(2))
+schedule.every().thursday.at("11:00").do(lambda: send_summary(2))
+schedule.every().friday.at("11:00").do(lambda: send_summary(2))
 
 print("🕒 Планировщик запущен. Ожидаем задач...")
 
