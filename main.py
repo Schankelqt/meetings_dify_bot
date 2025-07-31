@@ -111,7 +111,7 @@ def telegram_webhook():
                 with open("answers.json", "w", encoding="utf-8") as f:
                     json.dump(collected_answers, f, ensure_ascii=False, indent=2)
 
-                reply = cleaned_summary
+                reply = "✅ Спасибо за ответы! Отчёт будет отправлен руководителю."
             else:
                 reply = answer_text
         else:
