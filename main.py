@@ -14,6 +14,15 @@ app = Flask(__name__)
 collected_answers = {}
 conversation_ids = {}
 
+CONFIRMATION_PHRASES = [
+    "да", "да, всё верно", "да все верно", "всё верно", "все верно", 
+    "подтверждаю", "подтверждаю всё", "подтверждаю вариант", 
+    "всё так", "все так", "всё ок", "все ок", "ок", "окей", 
+    "точно", "верно", "ага", "готов", "готова", 
+    "да, всё так", "да, подтверждаю", "да, отправляй", 
+    "да, можно отправлять", "всё правильно", "все правильно"
+]
+
 def get_conversation_id(chat_id):
     url = f"{DIFY_API_URL}/conversations"
     headers = {"Authorization": f"Bearer {DIFY_API_KEY}"}
@@ -33,13 +42,10 @@ def get_conversation_id(chat_id):
         return None
 
 def remove_sum_and_above(text: str) -> str:
-    """Удаляет из текста все строки до и включая строку, содержащую 'sum' (регистр неважен)"""
     lines = text.split('\n')
     for i, line in enumerate(lines):
         if 'sum' in line.lower():
-            # Возвращаем всё, что после этой строки (не включая её)
             return "\n".join(lines[i+1:]).strip()
-    # Если не нашли, возвращаем текст без изменений
     return text.strip()
 
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
@@ -86,7 +92,6 @@ def telegram_webhook():
 
         response = send_to_dify(payload)
 
-        # При 404 — создаём новую сессию без conversation_id
         if response is not None and response.status_code == 404:
             print(f"[INFO] Conversation ID не существует, создаём новую сессию для {chat_id}")
             payload.pop("conversation_id", None)
@@ -101,7 +106,7 @@ def telegram_webhook():
         if response is not None and response.status_code == 200:
             answer_text = response.json().get("answer", "")
 
-            if "sum" in answer_text.lower():
+            if user_message.strip().lower() in CONFIRMATION_PHRASES and "sum" in answer_text.lower():
                 cleaned_summary = remove_sum_and_above(answer_text)
 
                 collected_answers[str(chat_id)] = {
