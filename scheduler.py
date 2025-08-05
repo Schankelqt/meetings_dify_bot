@@ -33,8 +33,14 @@ def send_questions():
     for team_id, team_data in TEAMS.items():
         for chat_id, name in team_data["members"].items():
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            requests.post(url, json={"chat_id": chat_id, "text": QUESTION_TEXT})
-            print(f"✅ Вопрос отправлен: {name}")
+            try:
+                response = requests.post(url, json={"chat_id": chat_id, "text": QUESTION_TEXT})
+                if response.ok:
+                    print(f"✅ Вопрос отправлен: {name} (chat_id={chat_id})")
+                else:
+                    print(f"❌ Ошибка отправки вопроса {name} (chat_id={chat_id}): {response.status_code} {response.text}")
+            except Exception as e:
+                print(f"❌ Исключение при отправке вопроса {name} (chat_id={chat_id}): {e}")
 
 def load_answers():
     try:
@@ -75,26 +81,34 @@ def send_summary(team_id):
     digest = build_digest(answers, team_data["members"])
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": team_data["manager"], "text": digest})
-    print(f"✅ Отчёт отправлен руководителю команды {team_id}")
+
+    for manager_id in (team_data.get("managers") or [team_data.get("manager")]):
+        try:
+            response = requests.post(url, json={"chat_id": manager_id, "text": digest})
+            if response.ok:
+                print(f"✅ Отчёт отправлен менеджеру {manager_id} команды {team_id}")
+            else:
+                print(f"❌ Ошибка отправки отчёта менеджеру {manager_id}: {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"❌ Исключение при отправке отчёта менеджеру {manager_id}: {e}")
 
 # Рассылка вопросов для обеих команд в 09:00
 schedule.every().monday.at("09:00").do(send_questions)
-schedule.every().tuesday.at("23:28").do(send_questions)
+schedule.every().tuesday.at("23:40").do(send_questions)
 schedule.every().wednesday.at("09:00").do(send_questions)
 schedule.every().thursday.at("09:00").do(send_questions)
 schedule.every().friday.at("09:00").do(send_questions)
 
 # Отчёт команде 1 в 09:30
 schedule.every().monday.at("09:30").do(lambda: send_summary(1))
-schedule.every().tuesday.at("23:30").do(lambda: send_summary(1))
+schedule.every().tuesday.at("23:42").do(lambda: send_summary(1))
 schedule.every().wednesday.at("09:30").do(lambda: send_summary(1))
 schedule.every().thursday.at("09:30").do(lambda: send_summary(1))
 schedule.every().friday.at("09:30").do(lambda: send_summary(1))
 
 # Отчёт команде 2 в 11:00
 schedule.every().monday.at("11:00").do(lambda: send_summary(2))
-schedule.every().tuesday.at("23:30").do(lambda: send_summary(2))
+schedule.every().tuesday.at("23:42").do(lambda: send_summary(2))
 schedule.every().wednesday.at("11:00").do(lambda: send_summary(2))
 schedule.every().thursday.at("11:00").do(lambda: send_summary(2))
 schedule.every().friday.at("11:00").do(lambda: send_summary(2))
