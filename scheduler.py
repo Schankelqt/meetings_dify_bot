@@ -87,7 +87,7 @@ schedule.every().friday.at("09:00").do(send_questions)
 
 # Отчёт команде 1 в 09:30
 schedule.every().monday.at("09:30").do(lambda: send_summary(1))
-schedule.every().tuesday.at("09:30").do(lambda: send_summary(1))
+schedule.every().tuesday.at("09:45").do(lambda: send_summary(1))
 schedule.every().wednesday.at("09:30").do(lambda: send_summary(1))
 schedule.every().thursday.at("09:30").do(lambda: send_summary(1))
 schedule.every().friday.at("09:30").do(lambda: send_summary(1))
