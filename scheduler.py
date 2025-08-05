@@ -94,21 +94,21 @@ def send_summary(team_id):
 
 # Рассылка вопросов для обеих команд в 09:00
 schedule.every().monday.at("09:00").do(send_questions)
-schedule.every().tuesday.at("23:52").do(send_questions)
+schedule.every().tuesday.at("09:00").do(send_questions)
 schedule.every().wednesday.at("09:00").do(send_questions)
 schedule.every().thursday.at("09:00").do(send_questions)
 schedule.every().friday.at("09:00").do(send_questions)
 
 # Отчёт команде 1 в 09:30
 schedule.every().monday.at("09:30").do(lambda: send_summary(1))
-schedule.every().tuesday.at("23:55").do(lambda: send_summary(1))
+schedule.every().tuesday.at("09:30").do(lambda: send_summary(1))
 schedule.every().wednesday.at("09:30").do(lambda: send_summary(1))
 schedule.every().thursday.at("09:30").do(lambda: send_summary(1))
 schedule.every().friday.at("09:30").do(lambda: send_summary(1))
 
 # Отчёт команде 2 в 11:00
 schedule.every().monday.at("11:00").do(lambda: send_summary(2))
-schedule.every().tuesday.at("23:55").do(lambda: send_summary(2))
+schedule.every().tuesday.at("11:00").do(lambda: send_summary(2))
 schedule.every().wednesday.at("11:00").do(lambda: send_summary(2))
 schedule.every().thursday.at("11:00").do(lambda: send_summary(2))
 schedule.every().friday.at("11:00").do(lambda: send_summary(2))
