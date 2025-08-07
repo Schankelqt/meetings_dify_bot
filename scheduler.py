@@ -2,9 +2,18 @@ import schedule
 import requests
 import time
 import json
+import logging
 from dotenv import dotenv_values
 from datetime import datetime
 from users import USERS, TEAMS  # Импортируем USERS и TEAMS
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger()
 
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
@@ -22,10 +31,10 @@ def is_weekday():
 
 def send_questions():
     if not is_weekday():
-        print("Сегодня выходной, вопросы не рассылаем")
+        logger.info("Сегодня выходной, вопросы не рассылаем")
         return
 
-    print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Рассылка вопросов сотрудникам...")
+    logger.info("📤 Рассылка вопросов сотрудникам...")
     # Очищаем файл перед рассылкой
     with open("answers.json", "w", encoding="utf-8") as f:
         json.dump({}, f)
@@ -36,12 +45,13 @@ def send_questions():
             try:
                 response = requests.post(url, json={"chat_id": chat_id, "text": QUESTION_TEXT})
                 if response.ok:
-                    print(f"✅ Вопрос отправлен: {name} (chat_id={chat_id})")
+                    logger.info(f"✅ Вопрос отправлен: {name} (chat_id={chat_id})")
                 else:
-                    print(f"❌ Ошибка отправки вопроса {name} (chat_id={chat_id}): {response.status_code} {response.text}")
+                    logger.error(f"❌ Ошибка отправки вопроса {name} (chat_id={chat_id}): {response.status_code} {response.text}")
             except Exception as e:
-                print(f"❌ Исключение при отправке вопроса {name} (chat_id={chat_id}): {e}")
-            time.sleep(0.1)  # Задержка 100 мс между запросами
+                logger.error(f"❌ Исключение при отправке вопроса {name} (chat_id={chat_id}): {e}")
+
+            time.sleep(1)  # Задержка в 1 секунду между отправками
 
 def load_answers():
     try:
@@ -72,10 +82,10 @@ def build_digest(answers, team_members):
 
 def send_summary(team_id):
     if not is_weekday():
-        print(f"Сегодня выходной, отчёты команде {team_id} не отправляем")
+        logger.info(f"Сегодня выходной, отчёты команде {team_id} не отправляем")
         return
 
-    print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Отправка отчёта руководителю команды {team_id}...")
+    logger.info(f"📤 Отправка отчёта руководителю команды {team_id}...")
     answers = load_answers()
 
     team_data = TEAMS[team_id]
@@ -83,16 +93,16 @@ def send_summary(team_id):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    for manager_id in (team_data.get("managers") or [team_data.get("manager")]):
+    managers = team_data.get("managers") or [team_data.get("manager")]
+    for manager_id in managers:
         try:
             response = requests.post(url, json={"chat_id": manager_id, "text": digest})
             if response.ok:
-                print(f"✅ Отчёт отправлен менеджеру {manager_id} команды {team_id}")
+                logger.info(f"✅ Отчёт отправлен менеджеру {manager_id} команды {team_id}")
             else:
-                print(f"❌ Ошибка отправки отчёта менеджеру {manager_id}: {response.status_code} {response.text}")
+                logger.error(f"❌ Ошибка отправки отчёта менеджеру {manager_id}: {response.status_code} {response.text}")
         except Exception as e:
-            print(f"❌ Исключение при отправке отчёта менеджеру {manager_id}: {e}")
-        time.sleep(0.1)  # Задержка между отправками
+            logger.error(f"❌ Исключение при отправке отчёта менеджеру {manager_id}: {e}")
 
 # Рассылка вопросов для обеих команд в 09:00
 schedule.every().monday.at("09:00").do(send_questions)
@@ -115,7 +125,7 @@ schedule.every().wednesday.at("11:00").do(lambda: send_summary(2))
 schedule.every().thursday.at("13:47").do(lambda: send_summary(2))
 schedule.every().friday.at("11:00").do(lambda: send_summary(2))
 
-print("🕒 Планировщик запущен. Ожидаем задач...")
+logger.info("🕒 Планировщик запущен. Ожидаем задач...")
 
 while True:
     schedule.run_pending()
