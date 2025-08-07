@@ -18,10 +18,18 @@ logger = logging.getLogger()
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
 
-QUESTION_TEXT = (
+QUESTION_TEXT_DEFAULT = (
     "Доброе утро! ☀️\n\n"
     "Пожалуйста, ответьте на 3 вопроса:\n"
     "1. Что делали вчера?\n"
+    "2. Что планируете сегодня?\n"
+    "3. Есть ли блокеры?"
+)
+
+QUESTION_TEXT_MONDAY = (
+    "Доброе утро! ☀️\n\n"
+    "Пожалуйста, ответьте на 3 вопроса:\n"
+    "1. Что делали в пятницу?\n"
     "2. Что планируете сегодня?\n"
     "3. Есть ли блокеры?"
 )
@@ -34,6 +42,13 @@ def send_questions():
         logger.info("Сегодня выходной, вопросы не рассылаем")
         return
 
+    # Определяем текст вопроса в зависимости от дня недели
+    today_weekday = datetime.today().weekday()
+    if today_weekday == 0:  # Понедельник
+        question_text = QUESTION_TEXT_MONDAY
+    else:
+        question_text = QUESTION_TEXT_DEFAULT
+
     logger.info("📤 Рассылка вопросов сотрудникам...")
     # Очищаем файл перед рассылкой
     with open("answers.json", "w", encoding="utf-8") as f:
@@ -43,7 +58,7 @@ def send_questions():
         for chat_id, name in team_data["members"].items():
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             try:
-                response = requests.post(url, json={"chat_id": chat_id, "text": QUESTION_TEXT})
+                response = requests.post(url, json={"chat_id": chat_id, "text": question_text})
                 if response.ok:
                     logger.info(f"✅ Вопрос отправлен: {name} (chat_id={chat_id})")
                 else:
@@ -51,7 +66,7 @@ def send_questions():
             except Exception as e:
                 logger.error(f"❌ Исключение при отправке вопроса {name} (chat_id={chat_id}): {e}")
 
-            time.sleep(1)  # Задержка в 1 секунду между отправками
+            time.sleep(1)  # Задержка 1 секунда между отправками
 
 def load_answers():
     try:
@@ -85,7 +100,7 @@ def send_summary(team_id):
         logger.info(f"Сегодня выходной, отчёты команде {team_id} не отправляем")
         return
 
-    logger.info(f"📤 Отправка отчёта руководителю команды {team_id}...")
+    logger.info(f"📤 Отправка отчётов руководителю команды {team_id}...")
     answers = load_answers()
 
     team_data = TEAMS[team_id]
