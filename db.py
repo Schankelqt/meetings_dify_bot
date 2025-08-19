@@ -1,21 +1,30 @@
 import os
 import logging
-from datetime import datetime, timezone
 from typing import Iterable
 
 import psycopg
 from psycopg.rows import dict_row
 
+# 1) базовое логирование (если не настроено выше)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("db")
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # вид: postgres://user:pass@host:5432/dbname
+# 2) Пытаемся подхватить .env, если переменная не задана
+if "DATABASE_URL" not in os.environ:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()  # загрузит .env из текущего каталога
+        logger.info("[DB] .env loaded by db.py")
+    except Exception as e:
+        logger.warning(f"[DB] cannot load .env automatically: {e}")
+
+DATABASE_URL = os.getenv("DATABASE_URL")  # postgresql://user:pass@host:5432/dbname
 
 _pool = None
 if DATABASE_URL:
     try:
-        # небольшой пул соединений
+        # Проверим, что можем коннектиться
         _pool = psycopg.Connection.connect(DATABASE_URL, autocommit=True)
-        # сразу закроем — далее будем открывать по месту через connect()
         _pool.close()
         logger.info("[DB] PostgreSQL enabled")
     except Exception as e:
@@ -28,7 +37,8 @@ def enabled() -> bool:
     return _pool is not None
 
 def _connect():
-    # отдельные коннекты (на малой нагрузке так проще и надёжнее)
+    if not DATABASE_URL:
+        raise RuntimeError("DB disabled: set DATABASE_URL")
     return psycopg.connect(DATABASE_URL, autocommit=True)
 
 def init_db():
