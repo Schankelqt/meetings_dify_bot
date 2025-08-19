@@ -3,8 +3,9 @@ import requests
 from dotenv import dotenv_values
 import json
 import logging
-from users import USERS, TEAMS  # берём имена и принадлежность к командам
-import db  # наш слой работы с PostgreSQL
+import re
+from users import USERS, TEAMS  # имена и принадлежность к командам
+import db  # слой работы с PostgreSQL
 
 # ---------- Логирование ----------
 logging.basicConfig(
@@ -17,12 +18,36 @@ logger = logging.getLogger("main")
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
 DIFY_API_KEY = env.get("DIFY_API_KEY")
-DIFY_API_URL = (env.get("DIFY_API_URL") or "").rstrip('/')  # например https://api.dify.ai/v1
+DIFY_API_URL = (env.get("DIFY_API_URL") or "").rstrip('/')
 
 app = Flask(__name__)
 
-# Память для conversation_id в рантайме
+# кеш conversation_id в рантайме
 conversation_ids = {}
+
+# ---------- Подтверждение ----------
+CONFIRMATION_PHRASES = {
+    "да", "да все верно", "да, все верно", "все верно", "всё верно",
+    "подтверждаю", "подтверждаю все", "подтверждаю вариант",
+    "все так", "всё так", "ок", "окей", "ага", "точно", "верно",
+    "готов", "готова", "готово", "да, подтверждаю", "да, отправляй",
+    "да, можно отправлять", "все правильно", "всё правильно",
+    "абсолютно", "правильно", "так и есть", "да-да", "все супер",
+    "всё супер", "супер", "хорошо", "отлично", "всё четко", "все четко",
+    "четко", "ясно"
+}
+# любые из этих символов будем просто выкидывать при нормализации
+CONFIRM_STRIP_RE = re.compile(r"[^\w\sёЁ]+", re.UNICODE)
+
+def normalize_confirmation(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = s.replace("ё", "е")
+    s = CONFIRM_STRIP_RE.sub("", s)  # убрали пунктуацию/эмодзи
+    s = re.sub(r"\s+", " ", s)       # сжали пробелы
+    return s
+
+def is_confirmation(user_text: str) -> bool:
+    return normalize_confirmation(user_text) in CONFIRMATION_PHRASES
 
 # ---------- Вспомогалки ----------
 def find_team_id(chat_id: int) -> int | None:
@@ -34,14 +59,13 @@ def find_team_id(chat_id: int) -> int | None:
 def clean_summary(answer_text: str) -> str:
     """
     Удаляем ВСЁ, что выше первой строки, содержащей 'sum' (без учёта регистра),
-    и саму строку с 'sum' тоже.
-    Возвращаем текст ниже.
+    и саму строку с 'sum' тоже — сохраняем только чистое саммари.
     """
-    lines = answer_text.splitlines()
-    idx = next((i for i, line in enumerate(lines) if "sum" in line.lower()), None)
-    if idx is None:
-        return answer_text.strip()
-    return "\n".join(lines[idx + 1:]).strip()
+    lines = (answer_text or "").splitlines()
+    for i, line in enumerate(lines):
+        if "sum" in line.lower():
+            return "\n".join(lines[i+1:]).strip()
+    return (answer_text or "").strip()
 
 def get_conversation_id(chat_id: int) -> str | None:
     url = f"{DIFY_API_URL}/conversations"
@@ -81,7 +105,7 @@ def telegram_webhook():
         user_message = data["message"]["text"]
         user_name = USERS.get(chat_id, "Неизвестный")
 
-        # Узнаём/кешируем conversation_id
+        # conversation_id для Dify
         conv_id = conversation_ids.get(chat_id)
         if not conv_id:
             conv_id = get_conversation_id(chat_id)
@@ -90,7 +114,6 @@ def telegram_webhook():
             else:
                 logger.info(f"[Dify] no conversation for {chat_id}, will create a new one")
 
-        # Dify payload
         payload = {
             "inputs": {},
             "query": user_message,
@@ -102,12 +125,11 @@ def telegram_webhook():
 
         response = send_to_dify(payload)
 
-        # Если Dify вернул 404 (конверсация не найдена) — пробуем без conversation_id
+        # если Dify вернул 404 — пробуем без conversation_id (создаст новую)
         if response is not None and response.status_code == 404:
             logger.info(f"[Dify] conversation {conv_id} not exists. retry without conv_id")
             payload.pop("conversation_id", None)
             response = send_to_dify(payload)
-            # запоминаем новый conversation_id, если прислали
             try:
                 if response is not None and response.ok:
                     new_conv = response.json().get("conversation_id")
@@ -117,16 +139,15 @@ def telegram_webhook():
             except Exception:
                 pass
 
-        # Ответ пользователю
+        # формируем ответ пользователю и при необходимости — сохраняем "финал"
         if response is not None and response.ok:
             body = response.json()
             answer_text = body.get("answer", "") or ""
 
-            # сохраняем саммари (по маркеру 'sum') в БД и/или answers.json
-            if "sum" in answer_text.lower():
+            if is_confirmation(user_message) and ("sum" in answer_text.lower()):
                 summary = clean_summary(answer_text)
 
-                # --- БД (если настроена) ---
+                # --- БД: сохраняем только при подтверждении ---
                 if db.enabled():
                     try:
                         team_id = find_team_id(chat_id)
@@ -138,11 +159,11 @@ def telegram_webhook():
                             conversation_id=body.get("conversation_id") or conversation_ids.get(chat_id),
                             summary_text=summary
                         )
-                        logger.info(f"[DB] summary saved for {chat_id}")
+                        logger.info(f"[DB] final summary saved for {chat_id}")
                     except Exception as e:
                         logger.error(f"[DB] save summary error: {e}")
 
-                # --- JSON-файл (бэкап на всякий случай) ---
+                # --- JSON‑бэкап (по желанию) ---
                 try:
                     try:
                         with open("answers.json", "r", encoding="utf-8") as f:
@@ -155,13 +176,14 @@ def telegram_webhook():
                 except Exception as e:
                     logger.error(f"[FILE] answers.json write error: {e}")
 
-                reply = summary
+                reply = "✅ Спасибо! Отчёт сохранён и будет отправлен руководителю."
             else:
+                # не финал — просто отдаём ответ Dify пользователю
                 reply = answer_text
         else:
             reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code if response else 'нет ответа'}"
 
-        # отправляем в Telegram
+        # отправка в Telegram
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
             tg_resp = requests.post(send_url, json={"chat_id": chat_id, "text": reply}, timeout=20)

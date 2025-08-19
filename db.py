@@ -2,28 +2,22 @@ import os
 import logging
 from typing import Iterable
 
+from dotenv import load_dotenv
 import psycopg
 from psycopg.rows import dict_row
 
-# 1) базовое логирование (если не настроено выше)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("db")
 
-# 2) Пытаемся подхватить .env, если переменная не задана
-if "DATABASE_URL" not in os.environ:
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()  # загрузит .env из текущего каталога
-        logger.info("[DB] .env loaded by db.py")
-    except Exception as e:
-        logger.warning(f"[DB] cannot load .env automatically: {e}")
+if not os.getenv("DATABASE_URL"):
+    load_dotenv()
+    logger.info("[DB] .env loaded by db.py")
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # postgresql://user:pass@host:5432/dbname
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 _pool = None
 if DATABASE_URL:
     try:
-        # Проверим, что можем коннектиться
         _pool = psycopg.Connection.connect(DATABASE_URL, autocommit=True)
         _pool.close()
         logger.info("[DB] PostgreSQL enabled")
@@ -42,7 +36,6 @@ def _connect():
     return psycopg.connect(DATABASE_URL, autocommit=True)
 
 def init_db():
-    """Создать таблицы, если их нет."""
     if not enabled():
         raise RuntimeError("DB disabled: set DATABASE_URL")
 
@@ -60,16 +53,35 @@ def init_db():
         tg_chat_id      BIGINT NOT NULL,
         conversation_id TEXT,
         summary_text    TEXT NOT NULL,
+        summary_date    DATE NOT NULL DEFAULT (timezone('UTC', now())::date),
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         FOREIGN KEY (tg_chat_id) REFERENCES employees(tg_chat_id) ON DELETE CASCADE
     );
 
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_summaries_day ON summaries (tg_chat_id, summary_date);
     CREATE INDEX IF NOT EXISTS idx_summaries_chat_time ON summaries (tg_chat_id, created_at DESC);
     """
     with _connect() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
     logger.info("[DB] schema ensured")
+
+def migrate_day_unique():
+    if not enabled():
+        raise RuntimeError("DB disabled: set DATABASE_URL")
+
+    sql = """
+    ALTER TABLE summaries ADD COLUMN IF NOT EXISTS summary_date DATE;
+    ALTER TABLE summaries ALTER COLUMN summary_date SET DEFAULT (timezone('UTC', now())::date);
+    UPDATE summaries
+       SET summary_date = (created_at AT TIME ZONE 'UTC')::date
+     WHERE summary_date IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_summaries_day ON summaries (tg_chat_id, summary_date);
+    """
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+    logger.info("[DB] migration to day-unique done")
 
 def upsert_employee(tg_chat_id: int, full_name: str | None, team_id: int | None):
     if not enabled():
@@ -93,8 +105,13 @@ def insert_summary(tg_chat_id: int, full_name: str | None, team_id: int | None,
         return -1
     upsert_employee(tg_chat_id, full_name, team_id)
     sql = """
-    INSERT INTO summaries (tg_chat_id, conversation_id, summary_text)
-    VALUES (%s, %s, %s)
+    INSERT INTO summaries (tg_chat_id, conversation_id, summary_text, summary_date)
+    VALUES (%s, %s, %s, DEFAULT)
+    ON CONFLICT (tg_chat_id, summary_date)
+    DO UPDATE SET
+      summary_text    = EXCLUDED.summary_text,
+      conversation_id = EXCLUDED.conversation_id,
+      created_at      = NOW()
     RETURNING id;
     """
     with _connect() as conn:
@@ -104,10 +121,6 @@ def insert_summary(tg_chat_id: int, full_name: str | None, team_id: int | None,
     return new_id
 
 def fetch_today_summaries(chat_ids: Iterable[int]) -> dict[int, str]:
-    """
-    Возвращает по одному последнему саммари на сотрудника за ТЕКУЩИЕ СУТКИ (UTC).
-    dict[tg_chat_id] = summary_text
-    """
     if not enabled():
         return {}
 
@@ -116,20 +129,10 @@ def fetch_today_summaries(chat_ids: Iterable[int]) -> dict[int, str]:
         return {}
 
     sql = """
-    WITH today AS (
-      SELECT s.*
-      FROM summaries s
-      WHERE s.created_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
-        AND s.created_at <  DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC') + INTERVAL '1 day'
-        AND s.tg_chat_id = ANY(%s)
-    ),
-    last_per_user AS (
-      SELECT DISTINCT ON (tg_chat_id)
-             tg_chat_id, summary_text, created_at
-      FROM today
-      ORDER BY tg_chat_id, created_at DESC
-    )
-    SELECT tg_chat_id, summary_text FROM last_per_user;
+    SELECT tg_chat_id, summary_text
+      FROM summaries
+     WHERE summary_date = (timezone('UTC', now())::date)
+       AND tg_chat_id = ANY(%s);
     """
     result = {}
     with _connect() as conn:
