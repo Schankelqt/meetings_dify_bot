@@ -152,19 +152,19 @@ def send_summary(team_id: int):
 
 # --- Расписание (оставляю как у тебя; время — по серверному UTC) ---
 schedule.every().monday.at("09:00").do(send_questions)
-schedule.every().tuesday.at("09:00").do(send_questions)
+schedule.every().tuesday.at("14:10").do(send_questions)
 schedule.every().wednesday.at("09:00").do(send_questions)
 schedule.every().thursday.at("09:00").do(send_questions)
 schedule.every().friday.at("09:00").do(send_questions)
 
 schedule.every().monday.at("09:30").do(lambda: send_summary(1))
-schedule.every().tuesday.at("09:30").do(lambda: send_summary(1))
+schedule.every().tuesday.at("14:14").do(lambda: send_summary(1))
 schedule.every().wednesday.at("09:30").do(lambda: send_summary(1))
 schedule.every().thursday.at("09:30").do(lambda: send_summary(1))
 schedule.every().friday.at("09:30").do(lambda: send_summary(1))
 
 schedule.every().monday.at("11:00").do(lambda: send_summary(2))
-schedule.every().tuesday.at("11:00").do(lambda: send_summary(2))
+schedule.every().tuesday.at("14:16").do(lambda: send_summary(2))
 schedule.every().wednesday.at("11:00").do(lambda: send_summary(2))
 schedule.every().thursday.at("11:00").do(lambda: send_summary(2))
 schedule.every().friday.at("11:00").do(lambda: send_summary(2))
