@@ -1,3 +1,4 @@
+# db.py
 import os
 import logging
 from typing import Iterable
@@ -60,6 +61,12 @@ def init_db():
 
     CREATE UNIQUE INDEX IF NOT EXISTS uq_summaries_day ON summaries (tg_chat_id, summary_date);
     CREATE INDEX IF NOT EXISTS idx_summaries_chat_time ON summaries (tg_chat_id, created_at DESC);
+
+    -- таблица-связка с Pyrus задачами
+    CREATE TABLE IF NOT EXISTS pyrus_links (
+        tg_chat_id BIGINT PRIMARY KEY,
+        task_id    BIGINT NOT NULL
+    );
     """
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -69,7 +76,6 @@ def init_db():
 def migrate_day_unique():
     if not enabled():
         raise RuntimeError("DB disabled: set DATABASE_URL")
-
     sql = """
     ALTER TABLE summaries ADD COLUMN IF NOT EXISTS summary_date DATE;
     ALTER TABLE summaries ALTER COLUMN summary_date SET DEFAULT (timezone('UTC', now())::date);
@@ -141,3 +147,27 @@ def fetch_today_summaries(chat_ids: Iterable[int]) -> dict[int, str]:
             for row in cur.fetchall():
                 result[int(row["tg_chat_id"])] = row["summary_text"]
     return result
+
+# ---------- Pyrus link helpers ----------
+def get_pyrus_task_id(tg_chat_id: int) -> int | None:
+    if not enabled():
+        return None
+    sql = "SELECT task_id FROM pyrus_links WHERE tg_chat_id = %s"
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (tg_chat_id,))
+            row = cur.fetchone()
+            return int(row[0]) if row else None
+
+def upsert_pyrus_task_id(tg_chat_id: int, task_id: int):
+    if not enabled():
+        return
+    sql = """
+    INSERT INTO pyrus_links (tg_chat_id, task_id)
+    VALUES (%s, %s)
+    ON CONFLICT (tg_chat_id)
+    DO UPDATE SET task_id = EXCLUDED.task_id;
+    """
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (tg_chat_id, task_id))

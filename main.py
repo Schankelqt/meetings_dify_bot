@@ -1,20 +1,18 @@
+# main.py
 from flask import Flask, request
 import requests
 from dotenv import dotenv_values
 import json
 import logging
 import re
-from users import USERS, TEAMS  # имена и принадлежность к командам
-import db  # слой работы с PostgreSQL
 
-# ---------- Логирование ----------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s"
-)
+from users import USERS, TEAMS
+import db
+import pyrus_client as pyrus
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("main")
 
-# ---------- Конфиг ----------
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
 DIFY_API_KEY = env.get("DIFY_API_KEY")
@@ -22,10 +20,8 @@ DIFY_API_URL = (env.get("DIFY_API_URL") or "").rstrip('/')
 
 app = Flask(__name__)
 
-# кеш conversation_id в рантайме
 conversation_ids = {}
 
-# ---------- Подтверждение ----------
 CONFIRMATION_PHRASES = {
     "да", "да все верно", "да, все верно", "все верно", "всё верно",
     "подтверждаю", "подтверждаю все", "подтверждаю вариант",
@@ -36,20 +32,18 @@ CONFIRMATION_PHRASES = {
     "всё супер", "супер", "хорошо", "отлично", "всё четко", "все четко",
     "четко", "ясно"
 }
-# любые из этих символов будем просто выкидывать при нормализации
 CONFIRM_STRIP_RE = re.compile(r"[^\w\sёЁ]+", re.UNICODE)
 
 def normalize_confirmation(s: str) -> str:
     s = (s or "").strip().lower()
     s = s.replace("ё", "е")
-    s = CONFIRM_STRIP_RE.sub("", s)  # убрали пунктуацию/эмодзи
-    s = re.sub(r"\s+", " ", s)       # сжали пробелы
+    s = CONFIRM_STRIP_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s)
     return s
 
 def is_confirmation(user_text: str) -> bool:
     return normalize_confirmation(user_text) in CONFIRMATION_PHRASES
 
-# ---------- Вспомогалки ----------
 def find_team_id(chat_id: int) -> int | None:
     for team_id, team_data in TEAMS.items():
         if chat_id in team_data["members"]:
@@ -57,10 +51,6 @@ def find_team_id(chat_id: int) -> int | None:
     return None
 
 def clean_summary(answer_text: str) -> str:
-    """
-    Удаляем ВСЁ, что выше первой строки, содержащей 'sum' (без учёта регистра),
-    и саму строку с 'sum' тоже — сохраняем только чистое саммари.
-    """
     lines = (answer_text or "").splitlines()
     for i, line in enumerate(lines):
         if "sum" in line.lower():
@@ -94,7 +84,6 @@ def send_to_dify(payload: dict) -> requests.Response | None:
         logger.error(f"[Dify] request error: {e}")
         return None
 
-# ---------- Хендлер ----------
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(silent=True) or {}
@@ -105,7 +94,6 @@ def telegram_webhook():
         user_message = data["message"]["text"]
         user_name = USERS.get(chat_id, "Неизвестный")
 
-        # conversation_id для Dify
         conv_id = conversation_ids.get(chat_id)
         if not conv_id:
             conv_id = get_conversation_id(chat_id)
@@ -125,7 +113,6 @@ def telegram_webhook():
 
         response = send_to_dify(payload)
 
-        # если Dify вернул 404 — пробуем без conversation_id (создаст новую)
         if response is not None and response.status_code == 404:
             logger.info(f"[Dify] conversation {conv_id} not exists. retry without conv_id")
             payload.pop("conversation_id", None)
@@ -139,7 +126,6 @@ def telegram_webhook():
             except Exception:
                 pass
 
-        # формируем ответ пользователю и при необходимости — сохраняем "финал"
         if response is not None and response.ok:
             body = response.json()
             answer_text = body.get("answer", "") or ""
@@ -147,7 +133,7 @@ def telegram_webhook():
             if is_confirmation(user_message) and ("sum" in answer_text.lower()):
                 summary = clean_summary(answer_text)
 
-                # --- БД: сохраняем только при подтверждении ---
+                # --- БД (финальная запись, одна на день) ---
                 if db.enabled():
                     try:
                         team_id = find_team_id(chat_id)
@@ -163,7 +149,40 @@ def telegram_webhook():
                     except Exception as e:
                         logger.error(f"[DB] save summary error: {e}")
 
-                # --- JSON‑бэкап (по желанию) ---
+                # --- Pyrus (создать задачу, если нет; обновить поля; добавить комментарий) ---
+                if pyrus.enabled():
+                    try:
+                        team_id = find_team_id(chat_id)
+                        # достанем task_id из БД
+                        task_id = db.get_pyrus_task_id(chat_id) if db.enabled() else None
+                        if not task_id:
+                            # создаём задачу
+                            task_id = pyrus.create_task_for_employee(
+                                tg_chat_id=chat_id,
+                                full_name=user_name,
+                                team_id=team_id,
+                                conversation_id=body.get("conversation_id") or conversation_ids.get(chat_id),
+                                last_summary=summary
+                            )
+                            logger.info(f"[Pyrus] task created: {task_id} for chat_id={chat_id}")
+                            if db.enabled():
+                                db.upsert_pyrus_task_id(chat_id, task_id)
+                        else:
+                            # обновим поля карточки
+                            pyrus.update_task_fields(
+                                task_id=task_id,
+                                tg_chat_id=chat_id,
+                                full_name=user_name,
+                                team_id=team_id,
+                                conversation_id=body.get("conversation_id") or conversation_ids.get(chat_id),
+                                last_summary=summary
+                            )
+                        # добавим комментарий с саммари
+                        pyrus.add_summary_comment(task_id, summary)
+                    except Exception as e:
+                        logger.error(f"[Pyrus] sync error for {chat_id}: {e}")
+
+                # --- JSON-бэкап (опционально) ---
                 try:
                     try:
                         with open("answers.json", "r", encoding="utf-8") as f:
@@ -178,12 +197,10 @@ def telegram_webhook():
 
                 reply = "✅ Спасибо! Отчёт сохранён и будет отправлен руководителю."
             else:
-                # не финал — просто отдаём ответ Dify пользователю
                 reply = answer_text
         else:
             reply = f"⚠️ Ошибка при обращении к Dify: {response.status_code if response else 'нет ответа'}"
 
-        # отправка в Telegram
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         try:
             tg_resp = requests.post(send_url, json={"chat_id": chat_id, "text": reply}, timeout=20)
