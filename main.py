@@ -17,8 +17,8 @@ logger = logging.getLogger("main")
 # ---------- Конфиг ----------
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
-DIFY_API_KEY = env.get("DIFY_API_KEY")
-DIFY_API_URL = (env.get("DIFY_API_URL") or "").rstrip('/')
+DIFY_API_KEY   = env.get("DIFY_API_KEY")
+DIFY_API_URL   = (env.get("DIFY_API_URL") or "").rstrip('/')
 
 app = Flask(__name__)
 
@@ -162,18 +162,20 @@ def telegram_webhook():
                     except Exception as e:
                         logger.error(f"[DB] save summary error: {e}")
 
-                # --- Pyrus (создать/найти персональную задачу и добавить комментарий + обновить поля) ---
-                try:
-                    if pyrus.configured(True):
-                        pyrus.upsert_summary_comment(
+                # --- Pyrus (создать/найти персональную задачу, обновить поля, добавить комментарий) ---
+                if pyrus.enabled():
+                    try:
+                        team_id = find_team_id(chat_id)
+                        pyrus_task_id = pyrus.upsert_summary_comment(
                             tg_chat_id=chat_id,
                             full_name=user_name,
-                            team_id=find_team_id(chat_id),
+                            team_id=team_id,
                             conversation_id=body.get("conversation_id") or conversation_ids.get(chat_id),
                             summary_text=summary
                         )
-                except Exception as e:
-                    logger.error(f"[Pyrus] push error: {e}")
+                        logger.info(f"[Pyrus] synced task_id={pyrus_task_id} for chat_id={chat_id}")
+                    except Exception as e:
+                        logger.error(f"[Pyrus] push error: {e}")
 
                 # --- JSON-бэкап (опционально) ---
                 try:
