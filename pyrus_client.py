@@ -1,95 +1,146 @@
 # pyrus_client.py
 import os
 import logging
-from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List
 
 import requests
+from dotenv import load_dotenv
 
 logger = logging.getLogger("pyrus")
 
-BASE_URL = os.getenv("PYRUS_BASE_URL")
-TOKEN = os.getenv("PYRUS_ACCESS_TOKEN")
-FORM_ID = int(os.getenv("PYRUS_FORM_ID", "0") or 0)
+# загружаем .env (чтобы работало под systemd так же, как в консоли)
+load_dotenv()
 
-FIELD_TG = int(os.getenv("PYRUS_FIELD_TG_CHAT_ID", "0") or 0)
-FIELD_NAME = int(os.getenv("PYRUS_FIELD_FULL_NAME", "0") or 0)
-FIELD_TEAM = int(os.getenv("PYRUS_FIELD_TEAM_ID", "0") or 0)
-FIELD_CONV = int(os.getenv("PYRUS_FIELD_CONVERSATION_ID", "0") or 0)
-FIELD_LAST_SUM = int(os.getenv("PYRUS_FIELD_LAST_SUMMARY", "0") or 0)
+BASE_URL = (os.getenv("PYRUS_BASE_URL") or "").rstrip("/")
+TOKEN = os.getenv("PYRUS_ACCESS_TOKEN") or ""
+FORM_ID_RAW = os.getenv("PYRUS_FORM_ID") or ""
 
-def enabled() -> bool:
-    ok = bool(BASE_URL and TOKEN and FORM_ID and FIELD_TG and FIELD_NAME and FIELD_TEAM and FIELD_CONV and FIELD_LAST_SUM)
-    if not ok:
-        logger.warning("[Pyrus] not fully configured — integration disabled")
+try:
+    FORM_ID = int(FORM_ID_RAW) if FORM_ID_RAW else 0
+except ValueError:
+    logger.error(f"[Pyrus] PYRUS_FORM_ID has invalid value: {FORM_ID_RAW!r}")
+    FORM_ID = 0
+
+SESSION = requests.Session()
+if TOKEN:
+    SESSION.headers.update({"Authorization": f"Bearer {TOKEN}", "Accept": "application/json"})
+
+def configured(verbose: bool = False) -> bool:
+    ok = True
+    if not BASE_URL:
+        ok = False
+        if verbose: logger.error("[Pyrus] PYRUS_BASE_URL is empty")
+    if not TOKEN:
+        ok = False
+        if verbose: logger.error("[Pyrus] PYRUS_ACCESS_TOKEN is empty")
+    if not FORM_ID:
+        ok = False
+        if verbose: logger.error("[Pyrus] PYRUS_FORM_ID is empty or invalid")
     return ok
 
-def _headers():
-    return {
-        "Authorization": f"Bearer {TOKEN}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
+def _url(path: str) -> str:
+    return f"{BASE_URL}{path}"
 
-def create_task_for_employee(tg_chat_id: int, full_name: str | None, team_id: int | None,
-                             conversation_id: str | None, last_summary: str | None) -> int:
+def get_form_fields() -> List[Dict[str, Any]]:
+    """Вернёт список полей формы (для отладки/получения id)."""
+    if not configured(True):
+        raise RuntimeError("Pyrus not configured")
+    resp = SESSION.get(_url(f"/forms/{FORM_ID}"), timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("fields", []) or []
+
+def _find_or_create_employee_task(tg_chat_id: int, full_name: Optional[str]) -> int:
     """
-    Создаёт новую задачу по форме и возвращает её task_id.
+    Ищем «персональную» задачу сотрудника по Telegram Chat ID.
+    Если не нашли — создаём новую задачу формы.
+    Возвращает task_id.
     """
-    if not enabled():
+    if not configured(True):
         raise RuntimeError("Pyrus not configured")
 
-    fields = [
-        {"id": FIELD_TG, "value": tg_chat_id},
-        {"id": FIELD_NAME, "value": full_name or ""},
-        {"id": FIELD_TEAM, "value": team_id if team_id is not None else ""},
-        {"id": FIELD_CONV, "value": conversation_id or ""},
-        {"id": FIELD_LAST_SUM, "value": last_summary or ""},
-    ]
+    # Пытаемся найти по поиску — запросом по тексту chat_id
+    q = str(tg_chat_id)
+    try:
+        sr = SESSION.get(_url(f"/tasks/search"), params={"text": q, "form_id": FORM_ID}, timeout=30)
+        sr.raise_for_status()
+        items = sr.json().get("tasks", []) or []
+        if items:
+            return int(items[0]["task_id"])
+    except Exception as e:
+        logger.warning(f"[Pyrus] search error: {e}")
+
+    # Создаём новую задачу в форме. В названии кладём ФИО и chat_id.
+    title = f"{full_name or 'Сотрудник'} — {tg_chat_id}"
     payload = {
         "form_id": FORM_ID,
-        "fields": fields
+        "subject": title,
+        # можно проставить поле "Telegram Chat ID" если оно существует — попробуем найти
+        "fields": []
     }
-    url = f"{BASE_URL}/tasks"
-    resp = requests.post(url, headers=_headers(), json=payload, timeout=30)
-    if not resp.ok:
-        raise RuntimeError(f"[Pyrus] create task error {resp.status_code} {resp.text}")
 
-    body = resp.json()
-    task_id = body.get("task", {}).get("id")
-    if not task_id:
-        raise RuntimeError(f"[Pyrus] unexpected create response: {body}")
-    return int(task_id)
+    try:
+        # Попробуем найти id поля "Telegram Chat ID" и заполнить его
+        fields = get_form_fields()
+        chat_field_id = next((f["id"] for f in fields if (f.get("name") or "").strip().lower() == "telegram chat id"), None)
+        if chat_field_id:
+            payload["fields"].append({"id": chat_field_id, "value": tg_chat_id})
+    except Exception as e:
+        logger.warning(f"[Pyrus] cannot prefill fields on create: {e}")
 
-def update_task_fields(task_id: int, tg_chat_id: int, full_name: str | None,
-                       team_id: int | None, conversation_id: str | None, last_summary: str | None):
-    """
-    Обновляет поля карточки через комментарий.
-    """
-    if not enabled():
-        return
-    fields = [
-        {"id": FIELD_TG, "value": tg_chat_id},
-        {"id": FIELD_NAME, "value": full_name or ""},
-        {"id": FIELD_TEAM, "value": team_id if team_id is not None else ""},
-        {"id": FIELD_CONV, "value": conversation_id or ""},
-        {"id": FIELD_LAST_SUM, "value": last_summary or ""},
-    ]
-    url = f"{BASE_URL}/tasks/{task_id}/comments"
-    payload = {"fields": fields, "text": None}
-    resp = requests.post(url, headers=_headers(), json=payload, timeout=30)
-    if not resp.ok:
-        raise RuntimeError(f"[Pyrus] update fields error {resp.status_code} {resp.text}")
+    cr = SESSION.post(_url("/tasks/create"), json=payload, timeout=30)
+    cr.raise_for_status()
+    task = cr.json()
+    task_id = int(task["task_id"])
+    return task_id
 
-def add_summary_comment(task_id: int, summary_text: str):
+def upsert_summary_comment(tg_chat_id: int,
+                           full_name: Optional[str],
+                           team_id: Optional[int],
+                           conversation_id: Optional[str],
+                           summary_text: str) -> int:
     """
-    Добавляет комментарий с датой и саммари. Дату ставим в UTC (ты в отчётах используешь UTC).
+    Находит/создаёт задачу сотрудника и добавляет комментарий с саммари.
+    Параллельно пытается обновить поля формы (если найдены соответствующие поля).
+    Возвращает task_id.
     """
-    if not enabled():
-        return
-    today = datetime.now(timezone.utc).date().isoformat()
-    text = f"{today}\n\n{summary_text}"
-    url = f"{BASE_URL}/tasks/{task_id}/comments"
-    payload = {"text": text}
-    resp = requests.post(url, headers=_headers(), json=payload, timeout=30)
-    if not resp.ok:
-        raise RuntimeError(f"[Pyrus] add comment error {resp.status_code} {resp.text}")
+    if not configured(True):
+        logger.warning("[Pyrus] not fully configured — integration disabled")
+        return -1
+
+    task_id = _find_or_create_employee_task(tg_chat_id, full_name)
+
+    # Попробуем собрать обновление полей (если такие поля есть в форме)
+    fields_update = []
+    try:
+        fields = get_form_fields()
+        by_name = { (f.get("name") or "").strip().lower(): f["id"] for f in fields }
+
+        if "telegram chat id" in by_name:
+            fields_update.append({"id": by_name["telegram chat id"], "value": tg_chat_id})
+        if "фио сотрудника" in by_name and full_name:
+            fields_update.append({"id": by_name["фио сотрудника"], "value": full_name})
+        if "team_id" in by_name and team_id is not None:
+            fields_update.append({"id": by_name["team_id"], "value": team_id})
+        if "conversation_id" in by_name and conversation_id:
+            fields_update.append({"id": by_name["conversation_id"], "value": conversation_id})
+        if "последнее саммари" in by_name and summary_text:
+            fields_update.append({"id": by_name["последнее саммари"], "value": summary_text})
+    except Exception as e:
+        logger.warning(f"[Pyrus] cannot build fields update: {e}")
+
+    comment_text = (
+        f"*Ежедневное саммари*\n\n"
+        f"{summary_text}"
+    )
+
+    payload = {
+        "task_id": task_id,
+        "text": comment_text,
+        "fields": fields_update or None
+    }
+
+    rr = SESSION.post(_url("/tasks/comment"), json=payload, timeout=30)
+    rr.raise_for_status()
+    logger.info(f"[Pyrus] summary posted to task {task_id}")
+    return task_id
