@@ -77,6 +77,7 @@ def clean_summary(text: str) -> str:
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(silent=True) or {}
+    logger.info("Webhook data: %s", json.dumps(data, ensure_ascii=False, indent=2))
 
     if "message" not in data:
         return "ok"
@@ -100,6 +101,10 @@ def telegram_webhook():
     response = send_to_dify(payload)
 
     if not response.ok:
+        try:
+            logger.error("Ошибка Dify: %s", response.json())
+        except Exception:
+            logger.error("Ошибка Dify (нельзя декодировать JSON): %s", response.text)
         reply = "⚠️ Ошибка Dify"
     else:
         body = response.json()
