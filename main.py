@@ -6,7 +6,7 @@ import json
 import logging
 import re
 
-from users import USERS, TEAMS
+from users import USERS
 
 # ---------- Логирование ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -16,11 +16,11 @@ logger = logging.getLogger("main")
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
 DIFY_API_KEY = env.get("DIFY_API_KEY")
-DIFY_API_URL = (env.get("DIFY_API_URL") or "").rstrip('/')
+DIFY_API_URL = (env.get("DIFY_API_URL") or "").rstrip("/")
 
 app = Flask(__name__)
 
-conversation_ids = {}
+conversation_ids: dict[int, str] = {}
 
 # ---------- Подтверждение ----------
 CONFIRMATION_PHRASES = {
@@ -38,8 +38,8 @@ def normalize_confirmation(s: str) -> str:
 def is_confirmation(text: str) -> bool:
     return normalize_confirmation(text) in CONFIRMATION_PHRASES
 
-# ---------- Вспомогалки ----------
-def get_conversation_id(chat_id: int):
+# ---------- Dify helpers ----------
+def get_conversation_id(chat_id: int) -> str | None:
     try:
         r = requests.get(
             f"{DIFY_API_URL}/conversations",
@@ -52,10 +52,10 @@ def get_conversation_id(chat_id: int):
             if data:
                 return data[0]["id"]
     except Exception as e:
-        logger.error(e)
+        logger.error("[Dify] get_conversation_id error: %s", e)
     return None
 
-def send_to_dify(payload: dict):
+def send_to_dify(payload: dict) -> requests.Response:
     return requests.post(
         f"{DIFY_API_URL}/chat-messages",
         headers={
@@ -77,7 +77,7 @@ def clean_summary(text: str) -> str:
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(silent=True) or {}
-    logger.info("Webhook data: %s", json.dumps(data, ensure_ascii=False, indent=2))
+    logger.info("Webhook data:\n%s", json.dumps(data, ensure_ascii=False, indent=2))
 
     if "message" not in data:
         return "ok"
@@ -86,12 +86,17 @@ def telegram_webhook():
     text = data["message"].get("text", "")
     user_name = USERS.get(chat_id, "Неизвестный")
 
-    conv_id = conversation_ids.get(chat_id) or get_conversation_id(chat_id)
-    if conv_id:
-        conversation_ids[chat_id] = conv_id
+    # conversation_id
+    conv_id = conversation_ids.get(chat_id)
+    if not conv_id:
+        conv_id = get_conversation_id(chat_id)
+        if conv_id:
+            conversation_ids[chat_id] = conv_id
 
+    # ✅ ПРАВИЛЬНЫЙ PAYLOAD
     payload = {
         "query": text,
+        "inputs": {},                 # ← ОБЯЗАТЕЛЬНО
         "response_mode": "blocking",
         "user": str(chat_id),
     }
@@ -102,9 +107,9 @@ def telegram_webhook():
 
     if not response.ok:
         try:
-            logger.error("Ошибка Dify: %s", response.json())
+            logger.error("[Dify] error response: %s", response.json())
         except Exception:
-            logger.error("Ошибка Dify (нельзя декодировать JSON): %s", response.text)
+            logger.error("[Dify] error raw: %s", response.text)
         reply = "⚠️ Ошибка Dify"
     else:
         body = response.json()
@@ -131,6 +136,7 @@ def telegram_webhook():
         else:
             reply = answer
 
+    # отправка в Telegram
     requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
         json={"chat_id": chat_id, "text": reply},
