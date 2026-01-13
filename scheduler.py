@@ -1,161 +1,180 @@
-# scheduler.py
+# === scheduler.py ===
 
-import schedule
-import requests
-import time
+import os
 import json
-import logging
+import schedule
+import time
+from datetime import datetime, date, timedelta
+import pytz
 from dotenv import dotenv_values
-from datetime import datetime, timezone
-from users import USERS, TEAMS
+from users import TEAMS
+import requests
 
-# ---------- Логирование ----------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger("scheduler")
+# Временная зона
+MSK = pytz.timezone("Europe/Moscow")
 
+# Загрузка переменных окружения
 env = dotenv_values(".env")
 TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
 
-QUESTION_TEXT_WEEKDAY = (
-    "Доброе утро! ☀️\n\n"
-    "Пожалуйста, ответьте на 3 вопроса:\n"
-    "1. Что делали вчера?\n"
-    "2. Что планируете сегодня?\n"
-    "3. Есть ли блокеры?"
-)
-QUESTION_TEXT_MONDAY = (
-    "Доброе утро! ☀️\n\n"
-    "Пожалуйста, ответьте на 3 вопроса:\n"
-    "1. Что делали в пятницу?\n"
-    "2. Что планируете сегодня?\n"
-    "3. Есть ли блокеры?"
-)
+QUESTION_SETS = {
+    "daily_start": [
+        "Доброе утро! ☀️\n\nПожалуйста, ответьте на 3 вопроса:",
+        "Что делал в пятницу?",
+        "Что планируешь сегодня?",
+        "Есть ли блокеры?",
+    ],
+    "daily_regular": [
+        "Доброе утро! ☀️\n\nПожалуйста, ответьте на 3 вопроса:",
+        "Что ты сделал вчера?",
+        "Что планируешь сегодня?",
+        "Есть ли блокеры?",
+    ],
+    "weekly": [
+        "Привет! ☀️\n\nПожалуйста, ответьте на 3 вопроса:",
+        "Что ты делал на этой неделе?",
+        "Что планируешь делать на следующей?",
+        "Есть ли блокеры?",
+    ],
+}
 
-# Пн=0 … Вс=6
-def today_wd() -> int:
-    return datetime.now(timezone.utc).weekday()
-
-def is_weekday() -> bool:
-    return today_wd() < 5
-
-def _question_text_today() -> str:
-    return QUESTION_TEXT_MONDAY if today_wd() == 0 else QUESTION_TEXT_WEEKDAY
-
-def _team_skip_today(team_id: int) -> bool:
-    """
-    Возвращает True, если сегодня для этой команды надо пропустить и вопросы, и отчёт.
-    Команда #2 пропускается по вт (1) и чт (3).
-    """
-    if team_id == 2 and today_wd() in (1, 3):
-        return True
-    return False
-
-def send_questions():
-    if not is_weekday():
-        logger.info("Сегодня выходной — рассылку вопросов пропускаем")
-        return
-
-    logger.info("📤 Рассылка вопросов сотрудникам…")
-
-    # Очищаем бэкап-файл (отчёт будет пустой, если никто не ответил)
-    try:
-        with open("answers.json", "w", encoding="utf-8") as f:
-            json.dump({}, f)
-    except Exception as e:
-        logger.warning(f"[FILE] answers.json clean warn: {e}")
-
-    text = _question_text_today()
-
-    for team_id, team_data in TEAMS.items():
-        if _team_skip_today(team_id):
-            logger.info(f"⏭ Команда {team_id}: сегодня вопросы не отправляем (день пропуска).")
-            continue
-
-        for chat_id, name in team_data["members"].items():
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            try:
-                resp = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=20)
-                if resp.ok:
-                    logger.info(f"✅ Отправлен вопрос: {name} (team={team_id}, chat_id={chat_id})")
-                else:
-                    logger.error(f"❌ Ошибка отправки {name} ({chat_id}): {resp.status_code} {resp.text}")
-            except Exception as e:
-                logger.error(f"❌ Исключение при отправке {name} ({chat_id}): {e}")
-            time.sleep(1)  # чтобы не спамить API
-
-def _load_answers_backup() -> dict:
+# ---------- Работа с answers.json ----------
+def load_answers() -> dict:
     try:
         with open("answers.json", "r", encoding="utf-8") as f:
             return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        logger.warning(f"[FILE] answers.json read warn: {e}")
+    except Exception:
         return {}
 
-def build_digest(team_members: dict[int, str]) -> tuple[str, int, int]:
-    answers = _load_answers_backup()
-    total = len(team_members)
+def save_answers(data: dict):
+    with open("answers.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def clear_team_members(team_id: int):
+    answers = load_answers()
+    team = TEAMS.get(team_id, {})
+    members = set(map(str, team.get("members", {}).keys()))
+    for uid in list(answers.keys()):
+        if uid in members:
+            del answers[uid]
+    save_answers(answers)
+
+# ---------- Работа с датами ----------
+def get_week_range_str(today: date) -> str:
+    monday = today - timedelta(days=today.weekday())
+    friday = monday + timedelta(days=4)
+    return f"{monday.strftime('%d.%m.%Y')} - {friday.strftime('%d.%m.%Y')}"
+
+# ---------- Формирование отчёта ----------
+def build_text_report(team_id: int) -> str:
+    answers = load_answers()
+    team = TEAMS.get(team_id)
+    if not team:
+        return "[!] Команда не найдена."
+
+    if team_id in (3, 4):
+        report_date = get_week_range_str(date.today())
+    else:
+        report_date = datetime.now(MSK).strftime("%Y-%m-%d")
+
+    report_lines = [f"\U0001F4DD Отчёт по команде «{team['team_name']}» за {report_date}"]
     responded = 0
-    lines = ["📝 Статусы на отчётное время:\n"]
+    total = len(team.get("members", {}))
 
-    for cid, name in team_members.items():
-        entry = answers.get(str(cid))
-        if entry:
-            lines.append(f"— {name}:\n{entry.get('summary', '')}\n")
+    for user_id, full_name in team.get("members", {}).items():
+        entry = answers.get(str(user_id))
+        summary = entry.get("summary") if entry else "-"
+        if summary != "-":
             responded += 1
-        else:
-            lines.append(f"— {name}:\n- (прочерк)\n")
+        report_lines.append(f"\n👤 {full_name.strip()}\n{summary}")
 
-    lines.append(f"Отчитались: {responded}/{total}")
-    return "\n".join(lines), responded, total
+    report_lines.append(f"\n📊 Отчитались: {responded}/{total}")
+    return "\n".join(report_lines)
 
-def send_summary(team_id: int):
-    if not is_weekday():
-        logger.info(f"Сегодня выходной — отчёт команде {team_id} не отправляем")
-        return
-    if _team_skip_today(team_id):
-        logger.info(f"⏭ Команда {team_id}: сегодня отчёт не отправляем (день пропуска).")
-        return
+# ---------- Отправка сообщений ----------
+def send_long_text(chat_id: int, text: str, chunk_size: int = 1000):
+    chunks = []
+    while text:
+        part = text[:chunk_size]
+        last_nl = part.rfind("\n")
+        if last_nl > 0 and len(text) > chunk_size:
+            part = text[:last_nl]
+        chunks.append(part.strip())
+        text = text[len(part):].lstrip()
 
-    logger.info(f"📤 Формирование отчёта для команды {team_id}…")
-    team_data = TEAMS[team_id]
-    members = team_data["members"]
-
-    digest, responded, total = build_digest(members)
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    managers = team_data.get("managers") or [team_data.get("manager")]
-    for manager_id in managers:
+    for i, part in enumerate(chunks):
+        header = f"(Часть {i+1}/{len(chunks)})\n" if len(chunks) > 1 else ""
         try:
-            resp = requests.post(url, json={"chat_id": manager_id, "text": digest}, timeout=20)
-            if resp.ok:
-                logger.info(f"✅ Отчёт отправлен менеджеру {manager_id} (команда {team_id}). Итог: {responded}/{total}")
-            else:
-                logger.error(f"❌ Ошибка отправки менеджеру {manager_id}: {resp.status_code} {resp.text}")
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": header + part},
+                timeout=20,
+            )
+            time.sleep(1)
         except Exception as e:
-            logger.error(f"❌ Исключение при отправке менеджеру {manager_id}: {e}")
+            print(f"⚠️ Ошибка при отправке части {i+1} → {chat_id}: {e}")
 
-# --- Расписание (UTC) ---
-schedule.every().monday.at("09:00").do(send_questions)
-schedule.every().tuesday.at("09:00").do(send_questions)
-schedule.every().wednesday.at("09:00").do(send_questions)
-schedule.every().thursday.at("09:00").do(send_questions)
-schedule.every().friday.at("09:00").do(send_questions)
+def send_questions(team_id: int, key: str):
+    team = TEAMS.get(team_id)
+    if not team:
+        return
+    clear_team_members(team_id)
+    text = "\n".join(QUESTION_SETS[key])
+    print(f"📨 Команда {team_id}: рассылаем вопросы ({key})...")
+    for user_id in team.get("members", {}):
+        try:
+            send_long_text(user_id, text)
+        except Exception as e:
+            print(f"⚠️ Ошибка при отправке → {user_id}: {e}")
 
-schedule.every().monday.at("09:30").do(lambda: send_summary(1))
-schedule.every().tuesday.at("09:30").do(lambda: send_summary(1))
-schedule.every().wednesday.at("09:30").do(lambda: send_summary(1))
-schedule.every().thursday.at("09:30").do(lambda: send_summary(1))
-schedule.every().friday.at("09:30").do(lambda: send_summary(1))
+def send_report(team_id: int):
+    team = TEAMS.get(team_id)
+    if not team:
+        return
+    text = build_text_report(team_id)
+    for manager_id in team.get("managers", []):
+        try:
+            send_long_text(manager_id, text)
+        except Exception as e:
+            print(f"⚠️ Ошибка при отправке отчёта → {manager_id}: {e}")
 
-schedule.every().monday.at("11:00").do(lambda: send_summary(2))
-schedule.every().tuesday.at("11:00").do(lambda: send_summary(2))     # будет пропущен логикой
-schedule.every().wednesday.at("11:00").do(lambda: send_summary(2))
-schedule.every().thursday.at("11:00").do(lambda: send_summary(2))    # будет пропущен логикой
-schedule.every().friday.at("11:00").do(lambda: send_summary(2))
+# ---------- Расписание ----------
+# Команда 1 (Daily)
+schedule.every().monday.at("09:00").do(send_questions, team_id=1, key="daily_start")
+schedule.every().tuesday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
+schedule.every().wednesday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
+schedule.every().thursday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
+schedule.every().friday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
 
-logger.info("🕒 Планировщик запущен. Ожидаем задачи…")
+schedule.every().monday.at("09:30").do(send_report, team_id=1)
+schedule.every().tuesday.at("09:30").do(send_report, team_id=1)
+schedule.every().wednesday.at("09:30").do(send_report, team_id=1)
+schedule.every().thursday.at("09:30").do(send_report, team_id=1)
+schedule.every().friday.at("09:30").do(send_report, team_id=1)
+
+# Команда 2 (Daily)
+schedule.every().monday.at("09:00").do(send_questions, team_id=2, key="daily_start")
+schedule.every().tuesday.at("09:00").do(send_questions, team_id=2, key="daily_regular")
+schedule.every().wednesday.at("09:00").do(send_questions, team_id=2, key="daily_regular")
+schedule.every().thursday.at("09:00").do(send_questions, team_id=2, key="daily_regular")
+schedule.every().friday.at("09:00").do(send_questions, team_id=2, key="daily_regular")
+
+schedule.every().monday.at("11:00").do(send_report, team_id=2)
+schedule.every().tuesday.at("11:00").do(send_report, team_id=2)
+schedule.every().wednesday.at("11:00").do(send_report, team_id=2)
+schedule.every().thursday.at("11:00").do(send_report, team_id=2)
+schedule.every().friday.at("11:00").do(send_report, team_id=2)
+
+# Команда 3 (Weekly)
+schedule.every().wednesday.at("12:00").do(send_questions, team_id=3, key="weekly")
+schedule.every().wednesday.at("23:55").do(send_report, team_id=3)
+
+# Команда 4 (Weekly)
+schedule.every().thursday.at("09:00").do(send_questions, team_id=4, key="weekly")
+schedule.every().thursday.at("16:00").do(send_report, team_id=4)
+
+# ---------- Запуск ----------
+print("🕒 Планировщик запущен. Ожидание задач...")
 while True:
     schedule.run_pending()
     time.sleep(30)

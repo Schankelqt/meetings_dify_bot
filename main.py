@@ -1,32 +1,41 @@
-# main.py
+# main.py — Telegram bot (VK Teams logic port)
+
 from flask import Flask, request
 import requests
 from dotenv import dotenv_values
 import json
 import logging
 import re
+from datetime import date
 
-from users import USERS
+from users import USERS, TEAMS
 
-# ---------- Логирование ----------
+# ---------- logging ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("main")
 
-# ---------- Конфиг ----------
+# ---------- env ----------
 env = dotenv_values(".env")
-TELEGRAM_TOKEN = env.get("TELEGRAM_TOKEN")
-DIFY_API_KEY = env.get("DIFY_API_KEY")
-DIFY_API_URL = (env.get("DIFY_API_URL") or "").rstrip("/")
+TELEGRAM_TOKEN = env["TELEGRAM_TOKEN"]
+DIFY_API_URL = env["DIFY_API_URL"].rstrip("/")
+DIFY_API_KEY_DAILY = env["DIFY_API_KEY_DAILY"]
+DIFY_API_KEY_WEEKLY = env["DIFY_API_KEY_WEEKLY"]
 
 app = Flask(__name__)
 
 conversation_ids: dict[int, str] = {}
+last_date: dict[int, str] = {}
 
-# ---------- Подтверждение ----------
+# ---------- confirmations ----------
 CONFIRMATION_PHRASES = {
     "да", "да все верно", "да, все верно", "все верно", "всё верно",
-    "подтверждаю", "все так", "ок", "окей", "ага", "готов",
-    "да, отправляй", "всё правильно", "супер", "отлично"
+    "подтверждаю", "подтверждаю все", "подтверждаю вариант",
+    "все так", "всё так", "ок", "окей", "ага", "точно", "верно",
+    "готов", "готова", "готово", "да, подтверждаю", "да, отправляй",
+    "да, можно отправлять", "все правильно", "всё правильно",
+    "абсолютно", "правильно", "так и есть", "да-да",
+    "все супер", "всё супер", "супер", "хорошо", "отлично",
+    "всё четко", "все четко", "четко", "ясно",
 }
 CONFIRM_STRIP_RE = re.compile(r"[^\w\sёЁ]+", re.UNICODE)
 
@@ -38,111 +47,140 @@ def normalize_confirmation(s: str) -> str:
 def is_confirmation(text: str) -> bool:
     return normalize_confirmation(text) in CONFIRMATION_PHRASES
 
-# ---------- Dify helpers ----------
-def get_conversation_id(chat_id: int) -> str | None:
+# ---------- helpers ----------
+def find_team_id(chat_id: int) -> int | None:
+    for team_id, team in TEAMS.items():
+        if chat_id in team["members"]:
+            return team_id
+    return None
+
+def get_dify_headers(team_id: int) -> dict:
+    api_key = DIFY_API_KEY_WEEKLY if team_id in (3, 4) else DIFY_API_KEY_DAILY
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+def dify_get_conversation_id(chat_id: int, headers: dict) -> str | None:
     try:
         r = requests.get(
             f"{DIFY_API_URL}/conversations",
-            headers={"Authorization": f"Bearer {DIFY_API_KEY}"},
+            headers=headers,
             params={"user": str(chat_id)},
             timeout=20,
         )
         if r.ok:
-            data = r.json().get("data") or []
-            if data:
-                return data[0]["id"]
+            items = r.json().get("data") or []
+            if items:
+                return items[0]["id"]
     except Exception as e:
-        logger.error("[Dify] get_conversation_id error: %s", e)
+        logger.error(f"[Dify] get_conversation_id error: {e}")
     return None
 
-def send_to_dify(payload: dict) -> requests.Response:
-    return requests.post(
+def dify_send_message(chat_id: int, text: str, headers: dict, conversation_id: str | None = None):
+    payload = {
+        "query": text,
+        "inputs": {},
+        "response_mode": "blocking",
+        "user": str(chat_id),
+    }
+    if conversation_id:
+        payload["conversation_id"] = conversation_id
+
+    resp = requests.post(
         f"{DIFY_API_URL}/chat-messages",
-        headers={
-            "Authorization": f"Bearer {DIFY_API_KEY}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         json=payload,
         timeout=60,
     )
+    logger.info(f"[Dify] status={resp.status_code} body={resp.text[:1000]}")
+    return resp
 
-def clean_summary(text: str) -> str:
-    lines = (text or "").splitlines()
-    for i, line in enumerate(lines):
-        if "sum" in line.lower():
-            return "\n".join(lines[i + 1 :]).strip()
-    return text.strip()
+def send_long_text(chat_id: int, text: str, chunk_size: int = 1000):
+    chunks = []
+    while text:
+        part = text[:chunk_size]
+        last_nl = part.rfind("\n")
+        if last_nl > 0 and len(text) > chunk_size:
+            part = text[:last_nl]
+        chunks.append(part.strip())
+        text = text[len(part):].lstrip()
 
-# ---------- Webhook ----------
+    for i, part in enumerate(chunks):
+        header = f"(Часть {i+1}/{len(chunks)})\n" if len(chunks) > 1 else ""
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": header + part},
+            timeout=20,
+        )
+
+# ---------- webhook ----------
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(silent=True) or {}
-    logger.info("Webhook data:\n%s", json.dumps(data, ensure_ascii=False, indent=2))
+    logger.info("Webhook:\n%s", json.dumps(data, ensure_ascii=False, indent=2))
 
     if "message" not in data:
         return "ok"
 
     chat_id = data["message"]["chat"]["id"]
-    text = data["message"].get("text", "")
+    user_text = data["message"].get("text", "")
     user_name = USERS.get(chat_id, "Неизвестный")
 
-    # conversation_id
+    team_id = find_team_id(chat_id)
+    if not team_id:
+        logger.warning(f"User {chat_id} not in TEAMS")
+        return "ok"
+
+    today = date.today().isoformat()
+    if last_date.get(chat_id) != today:
+        conversation_ids.pop(chat_id, None)
+        last_date[chat_id] = today
+
+    headers = get_dify_headers(team_id)
     conv_id = conversation_ids.get(chat_id)
+
     if not conv_id:
-        conv_id = get_conversation_id(chat_id)
+        conv_id = dify_get_conversation_id(chat_id, headers)
         if conv_id:
             conversation_ids[chat_id] = conv_id
 
-    # ✅ ПРАВИЛЬНЫЙ PAYLOAD
-    payload = {
-        "query": text,
-        "inputs": {},                 # ← ОБЯЗАТЕЛЬНО
-        "response_mode": "blocking",
-        "user": str(chat_id),
-    }
-    if conv_id:
-        payload["conversation_id"] = conv_id
+    resp = dify_send_message(chat_id, user_text, headers, conv_id)
 
-    response = send_to_dify(payload)
+    if resp.status_code == 400:
+        resp = dify_send_message(chat_id, user_text, headers)
 
-    if not response.ok:
-        try:
-            logger.error("[Dify] error response: %s", response.json())
-        except Exception:
-            logger.error("[Dify] error raw: %s", response.text)
-        reply = "⚠️ Ошибка Dify"
-    else:
-        body = response.json()
-        answer = body.get("answer", "")
+    if resp.ok:
+        body = resp.json()
+        answer = body.get("answer", "") or ""
+        new_conv = body.get("conversation_id")
+        if new_conv:
+            conversation_ids[chat_id] = new_conv
 
-        if is_confirmation(text) and "sum" in answer.lower():
-            summary = clean_summary(answer)
-
+        if is_confirmation(user_text) and "sum" in answer.lower():
             try:
                 with open("answers.json", "r", encoding="utf-8") as f:
                     answers = json.load(f)
-            except FileNotFoundError:
+            except Exception:
                 answers = {}
 
             answers[str(chat_id)] = {
                 "name": user_name,
-                "summary": summary,
+                "summary": answer,
+                "date": today,
+                "team_id": team_id,
             }
 
             with open("answers.json", "w", encoding="utf-8") as f:
                 json.dump(answers, f, ensure_ascii=False, indent=2)
 
-            reply = "✅ Отчёт принят"
+            reply = "✅ Спасибо! Отчёт сохранён."
         else:
             reply = answer
+    else:
+        reply = "⚠️ Ошибка при обращении к Dify"
 
-    # отправка в Telegram
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": chat_id, "text": reply},
-        timeout=20,
-    )
-
+    send_long_text(chat_id, reply)
     return "ok"
 
 if __name__ == "__main__":
