@@ -141,13 +141,13 @@ def send_report(team_id: int):
 # ---------- Расписание ----------
 # Команда 1 (Daily)
 schedule.every().monday.at("09:00").do(send_questions, team_id=1, key="daily_start")
-schedule.every().tuesday.at("17:07").do(send_questions, team_id=1, key="daily_regular")
+schedule.every().tuesday.at("17:10").do(send_questions, team_id=1, key="daily_regular")
 schedule.every().wednesday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
 schedule.every().thursday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
 schedule.every().friday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
 
 schedule.every().monday.at("09:30").do(send_report, team_id=1)
-schedule.every().tuesday.at("17:09").do(send_report, team_id=1)
+schedule.every().tuesday.at("17:12").do(send_report, team_id=1)
 schedule.every().wednesday.at("09:30").do(send_report, team_id=1)
 schedule.every().thursday.at("09:30").do(send_report, team_id=1)
 schedule.every().friday.at("09:30").do(send_report, team_id=1)
