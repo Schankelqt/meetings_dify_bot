@@ -1,4 +1,5 @@
 # scheduler.py
+
 import schedule
 import requests
 import time
@@ -7,7 +8,6 @@ import logging
 from dotenv import dotenv_values
 from datetime import datetime, timezone
 from users import USERS, TEAMS
-import db
 
 # ---------- Логирование ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -57,7 +57,7 @@ def send_questions():
 
     logger.info("📤 Рассылка вопросов сотрудникам…")
 
-    # Очищаем бэкап-файл (не влияет на БД)
+    # Очищаем бэкап-файл (отчёт будет пустой, если никто не ответил)
     try:
         with open("answers.json", "w", encoding="utf-8") as f:
             json.dump({}, f)
@@ -93,40 +93,19 @@ def _load_answers_backup() -> dict:
         logger.warning(f"[FILE] answers.json read warn: {e}")
         return {}
 
-def build_digest_from_db(team_members: dict[int, str]) -> tuple[str, int, int]:
+def build_digest(team_members: dict[int, str]) -> tuple[str, int, int]:
+    answers = _load_answers_backup()
     total = len(team_members)
     responded = 0
     lines = ["📝 Статусы на отчётное время:\n"]
 
-    if not db.enabled():
-        answers = _load_answers_backup()
-        for cid, name in team_members.items():
-            entry = answers.get(str(cid))
-            if entry:
-                lines.append(f"— {name}:\n{entry.get('summary','')}\n")
-                responded += 1
-            else:
-                lines.append(f"— {name}:\n- (прочерк)\n")
-        return "\n".join(lines + [f"Отчитались: {responded}/{total}"]), responded, total
-
-    try:
-        summaries = db.fetch_today_summaries(list(team_members.keys()))
-        for cid, name in team_members.items():
-            if cid in summaries:
-                lines.append(f"— {name}:\n{summaries[cid]}\n")
-                responded += 1
-            else:
-                lines.append(f"— {name}:\n- (прочерк)\n")
-    except Exception as e:
-        logger.error(f"[DB] fetch summaries error: {e}")
-        answers = _load_answers_backup()
-        for cid, name in team_members.items():
-            entry = answers.get(str(cid))
-            if entry:
-                lines.append(f"— {name}:\n{entry.get('summary','')}\n")
-                responded += 1
-            else:
-                lines.append(f"— {name}:\n- (прочерк)\n")
+    for cid, name in team_members.items():
+        entry = answers.get(str(cid))
+        if entry:
+            lines.append(f"— {name}:\n{entry.get('summary', '')}\n")
+            responded += 1
+        else:
+            lines.append(f"— {name}:\n- (прочерк)\n")
 
     lines.append(f"Отчитались: {responded}/{total}")
     return "\n".join(lines), responded, total
@@ -143,7 +122,7 @@ def send_summary(team_id: int):
     team_data = TEAMS[team_id]
     members = team_data["members"]
 
-    digest, responded, total = build_digest_from_db(members)
+    digest, responded, total = build_digest(members)
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     managers = team_data.get("managers") or [team_data.get("manager")]
