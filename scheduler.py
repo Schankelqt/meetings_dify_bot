@@ -141,13 +141,13 @@ def send_report(team_id: int):
 # ---------- Расписание ----------
 # Команда 1 (Daily)
 schedule.every().monday.at("09:00").do(send_questions, team_id=1, key="daily_start")
-schedule.every().tuesday.at("17:32").do(send_questions, team_id=1, key="daily_regular")
+schedule.every().tuesday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
 schedule.every().wednesday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
 schedule.every().thursday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
 schedule.every().friday.at("09:00").do(send_questions, team_id=1, key="daily_regular")
 
 schedule.every().monday.at("09:30").do(send_report, team_id=1)
-schedule.every().tuesday.at("17:34").do(send_report, team_id=1)
+schedule.every().tuesday.at("09:30").do(send_report, team_id=1)
 schedule.every().wednesday.at("09:30").do(send_report, team_id=1)
 schedule.every().thursday.at("09:30").do(send_report, team_id=1)
 schedule.every().friday.at("09:30").do(send_report, team_id=1)
@@ -166,8 +166,8 @@ schedule.every().thursday.at("11:00").do(send_report, team_id=2)
 schedule.every().friday.at("11:00").do(send_report, team_id=2)
 
 # Команда 3 (Weekly)
-schedule.every().tuesday.at("17:32").do(send_questions, team_id=3, key="weekly")
-schedule.every().tuesday.at("17:34").do(send_report, team_id=3)
+schedule.every().wednesday.at("12:00").do(send_questions, team_id=3, key="weekly")
+schedule.every().wednesday.at("23:55").do(send_report, team_id=3)
 
 # Команда 4 (Weekly)
 schedule.every().thursday.at("09:00").do(send_questions, team_id=4, key="weekly")
