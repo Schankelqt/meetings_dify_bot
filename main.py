@@ -1,5 +1,3 @@
-# main.py — Telegram bot (VK Teams logic port)
-
 from flask import Flask, request
 import requests
 from dotenv import dotenv_values
@@ -26,7 +24,7 @@ app = Flask(__name__)
 conversation_ids: dict[int, str] = {}
 last_date: dict[int, str] = {}
 
-# ---------- confirmations ----------
+# ---------- confirmations ---------- Костыльное подтверждение
 CONFIRMATION_PHRASES = {
     "да", "да все верно", "да, все верно", "все верно", "всё верно",
     "подтверждаю", "подтверждаю все", "подтверждаю вариант",

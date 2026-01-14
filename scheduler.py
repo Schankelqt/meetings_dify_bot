@@ -1,5 +1,3 @@
-# === scheduler.py ===
-
 import os
 import json
 import schedule
